@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cd-scrobbler"
+version = "0.1.0"
+description = "Scrobble CD playback to ListenBrainz"
+requires-python = ">=3.12"
+dependencies = [
+    "musicbrainzngs",
+    "discid",
+    "requests",
+]
+
+[project.scripts]
+cdscrobble = "cdscrobble:main"
+
+[tool.setuptools]
+py-modules = ["cdscrobble", "mbid", "musicbrainz", "listenbrainz"]
