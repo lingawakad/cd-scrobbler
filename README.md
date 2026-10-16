@@ -5,6 +5,9 @@ Scrobble CD playback to ListenBrainz via Strawberry.
 ## Install
 
 ```bash
+# System dependencies (Fedora example)
+sudo dnf install playerctl cdda2wav  # cd-info comes from cdda2wav
+
 pip install cd-scrobbler
 # or from source:
 pip install ./cd-scrobbler
