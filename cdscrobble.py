@@ -168,8 +168,8 @@ def cmd_play(args):
 
     # Start playback if requested
     if args.start:
-        subprocess.run(["playerctl", "-p", "strawberry", "play"],
-                       capture_output=True, timeout=5)
+        subprocess.Popen(["mpv", "--demuxer-max-bytes=5MiB", "--ao=pipewire", "--gapless-audio", "cdda://"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if args.verbose:
             print("Playback started", file=sys.stderr)
 
@@ -300,6 +300,12 @@ def _monitor_and_scrobble(info: dict, args):
     from listenbrainz import submit_listen, submit_playing_now
 
     tracks_by_pos = {int(t["position"]): t for t in info["tracks"]}
+    # Calculate track offsets (cumulative) in microseconds
+    track_offsets = []
+    cumulative = 0
+    for t in info["tracks"]:
+        track_offsets.append(cumulative)
+        cumulative += t.get("length_ms", 0) * 1000  # ms -> us
     last_position = None
     start_time = None
     scrobbled = set()  # positions already scrobbled
@@ -325,27 +331,36 @@ def _monitor_and_scrobble(info: dict, args):
                     if args.verbose:
                         print(f"Scrobble failed: {e}", file=sys.stderr)
 
+    def _current_track(position_us):
+        """Map position (us) to track number."""
+        for i in range(len(track_offsets) - 1):
+            if track_offsets[i] <= position_us < track_offsets[i + 1]:
+                return i + 1  # track positions are 1-indexed
+        return len(track_offsets)  # last track or beyond
+
     while True:
         try:
-            # Get current track and playback status
-            title_result = subprocess.run(
-                ["playerctl", "-p", "strawberry", "metadata", "xesam:title"],
-                capture_output=True, text=True, timeout=5,
-            )
-            num_result = subprocess.run(
-                ["playerctl", "-p", "strawberry", "metadata", "xesam:trackNumber"],
-                capture_output=True, text=True, timeout=5,
-            )
+            # Get playback status and position
             status_result = subprocess.run(
-                ["playerctl", "-p", "strawberry", "status"],
+                ["playerctl", "-p", "mpv", "status"],
                 capture_output=True, text=True, timeout=5,
             )
-            title = title_result.stdout.strip()
-            track_num = int(num_result.stdout.strip()) if num_result.stdout.strip().isdigit() else None
+            pos_result = subprocess.run(
+                ["playerctl", "-p", "mpv", "position"],
+                capture_output=True, text=True, timeout=5,
+            )
             status = status_result.stdout.strip()
+            pos_us = 0
+            try:
+                pos_val = pos_result.stdout.strip().replace("us", "").strip()
+                pos_us = int(float(pos_val) * 1_000_000)  # seconds -> microseconds
+            except ValueError:
+                pass
 
-            if args.verbose and title:
-                print(f"Track {track_num}: {title!r}", file=sys.stderr)
+            current_track = _current_track(pos_us) if pos_us > 0 else None
+
+            if args.verbose and current_track:
+                print(f"Track {current_track}", file=sys.stderr)
 
             # Detect playback stopped — scrobble current track then exit
             if status == "Stopped" and last_position is not None:
@@ -364,49 +379,30 @@ def _monitor_and_scrobble(info: dict, args):
 
             # Detect resume from pause
             if status == "Playing" and last_position is not None and start_time is None:
-                pos_result = subprocess.run(
-                    ["playerctl", "-p", "strawberry", "position"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                pos_ms = 0
-                try:
-                    pos_ms = int(pos_result.stdout.strip().replace("us", "").strip())
-                except ValueError:
-                    pass
-                start_time = time.time() - (pos_ms / 1_000_000) if pos_ms > 0 else time.time()
+                start_time = time.time() - (pos_us / 1_000_000) if pos_us > 0 else time.time()
                 if args.verbose:
                     print("Resumed", file=sys.stderr)
 
             # Detect track change
-            if track_num is not None and track_num != last_position:
+            if current_track is not None and current_track != last_position:
                 # Scrobble previous track
                 if last_position is not None:
                     _scrobble_track(last_position)
 
                 # New track started — estimate start time from position
-                pos_result = subprocess.run(
-                    ["playerctl", "-p", "strawberry", "position"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                pos_ms = 0
-                try:
-                    pos_ms = int(pos_result.stdout.strip().replace("us", "").strip())
-                except ValueError:
-                    pass
-                # playerctl position is in microseconds
-                start_time = time.time() - (pos_ms / 1_000_000) if pos_ms > 0 else time.time()
-                last_position = track_num
+                start_time = time.time() - (pos_us / 1_000_000) if pos_us > 0 else time.time()
+                last_position = current_track
 
                 # Submit playing_now
                 if not args.no_playing_now:
-                    track = tracks_by_pos.get(track_num, {})
+                    track = tracks_by_pos.get(current_track, {})
                     track.setdefault("album", info["title"])
                     track.setdefault("artist", info["artist"])
                     track.setdefault("release_mbid", info.get("release_mbid", ""))
                     try:
                         submit_playing_now(track)
                         if args.verbose:
-                            print(f"Now: {track.get('title', title)}", file=sys.stderr)
+                            print(f"Now: {track.get('title', current_track)}", file=sys.stderr)
                     except Exception as e:
                         if args.verbose:
                             print(f"playing_now failed: {e}", file=sys.stderr)
