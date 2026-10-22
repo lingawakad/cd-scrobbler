@@ -350,6 +350,11 @@ def _monitor_and_scrobble(info: dict, args):
                 capture_output=True, text=True, timeout=5,
             )
             status = status_result.stdout.strip()
+            # If playerctl returns empty/error, player exited — scrobble and exit
+            if not status and last_position is not None:
+                _scrobble_track(last_position)
+                break
+
             pos_us = 0
             try:
                 pos_val = pos_result.stdout.strip().replace("us", "").strip()
