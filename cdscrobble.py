@@ -384,7 +384,7 @@ def _monitor_and_scrobble(info: dict, args):
 
             # Detect resume from pause
             if status == "Playing" and last_position is not None and start_time is None:
-                start_time = time.time() - (pos_us / 1_000_000) if pos_us > 0 else time.time()
+                start_time = time.time()
                 if args.verbose:
                     print("Resumed", file=sys.stderr)
 
@@ -394,8 +394,8 @@ def _monitor_and_scrobble(info: dict, args):
                 if last_position is not None:
                     _scrobble_track(last_position)
 
-                # New track started — estimate start time from position
-                start_time = time.time() - (pos_us / 1_000_000) if pos_us > 0 else time.time()
+                # New track started — record when this track began
+                start_time = time.time()
                 last_position = current_track
 
                 # Submit playing_now
