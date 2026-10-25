@@ -1,6 +1,6 @@
 # cd-scrobbler
 
-Scrobble CD playback to ListenBrainz via Strawberry.
+Scrobble CD playback to ListenBrainz.
 
 ## Install
 
@@ -40,11 +40,11 @@ Reads the disc ID from the CD drive (`/dev/sr0` by default), looks it up on Musi
 
 ### `play`
 
-Identifies the CD, then monitors Strawberry via `playerctl` and scrobbles each track to ListenBrainz when playback ends. Exits when playback stops. Pausing keeps the process alive — resume playback and it picks up where it left off.
+Identifies the CD, then uses `mpv` for playback and `playerctl` to track position. Scrobbles each track to ListenBrainz when playback ends. Exits when playback stops. Pausing scrobbles the current track — resume and it picks up the next one.
 
 ### `scrobble`
 
-Standalone daemon that monitors any MPRIS-compatible player and scrobbles tracks. Runs indefinitely.
+Standalone daemon that monitors any MPRIS-compatible player and scrobbles tracks by metadata. Runs indefinitely. (Use `play` for CD playback with mpv and MusicBrainz track data.)
 
 ## Dependencies
 
@@ -52,4 +52,5 @@ Standalone daemon that monitors any MPRIS-compatible player and scrobbles tracks
 - `discid` — CD disc ID reading
 - `requests` — ListenBrainz API
 - `playerctl` — MPRIS playback monitoring (system package)
+- `mpv` — CD playback with read-ahead buffer (system package)
 - `cd-info` — CD-Text fallback (system package, optional)

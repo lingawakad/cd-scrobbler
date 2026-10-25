@@ -1,4 +1,0 @@
-musicbrainzngs
-discid
-liblistenbrainz
-requests

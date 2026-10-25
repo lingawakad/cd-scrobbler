@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 *.egg-info/
 *.sock
+127.0.0.1:*
