@@ -35,12 +35,20 @@ def main():
     p_play.add_argument("--no-playing-now", action="store_true",
                         help="Skip playing_now notifications")
 
+    # cache: manually associate a disc ID with a release MBID
+    p_cache = sub.add_parser("cache", help="Cache a release MBID for the current disc")
+    p_cache.add_argument("-d", "--device", default="/dev/sr0")
+    p_cache.add_argument("-v", "--verbose", action="store_true")
+    p_cache.add_argument("release_mbid", help="MusicBrainz release ID")
+
     args = parser.parse_args()
 
     if args.command == "lookup":
         cmd_lookup(args)
     elif args.command == "play":
         cmd_play(args)
+    elif args.command == "cache":
+        cmd_cache(args)
     else:
         parser.print_help()
         sys.exit(1)
@@ -288,6 +296,35 @@ def _monitor_and_scrobble(info: dict, args):
             pass
 
         time.sleep(2)
+
+
+def cmd_cache(args):
+    """Read disc ID and cache it against a user-provided release MBID."""
+    from musicbrainz import _load_cache, _get_cached, _set_cached
+
+    try:
+        disc_id, _ = get_disc_info(args.device)
+    except DiscReadError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    cache = _load_cache()
+    disc_key = f"disc:{disc_id}"
+
+    existing = _get_cached(disc_key, cache)
+    if existing:
+        print(f"Already cached: {disc_key} -> {existing}")
+        if existing != args.release_mbid:
+            print(f"Overwriting with {args.release_mbid}...", file=sys.stderr)
+
+    _set_cached(disc_key, args.release_mbid, cache)
+
+    # Verify by fetching release info
+    try:
+        info = get_release_info(args.release_mbid)
+        print(f"Cached: {disc_id} -> {info['artist']} — {info['title']}")
+    except Exception as e:
+        print(f"Cached (verify failed: {e})", file=sys.stderr)
 
 
 def _lookup_by_cdtext(args):

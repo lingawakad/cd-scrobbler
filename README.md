@@ -24,12 +24,12 @@ echo "your-token-here" > ~/.lbtoken
 ## Usage
 
 ```
-cdscrobble lookup   # identify CD and print metadata
-cdscrobble play     # identify CD, start playback, scrobble
-cdscrobble play --start    # same, but start mpv playback
+cdscrobble lookup              # identify CD and print metadata
+cdscrobble play --start        # identify CD, start mpv playback, scrobble
+cdscrobble cache <release-mbid>  # cache a release MBID for the current disc
 ```
 
-All commands support `-v` for verbose output and `--no-playing-now` to skip playing_now notifications.
+All commands support `-d` (device, default `/dev/sr0`), `-v` (verbose), and `--no-playing-now` (play only).
 
 ## Commands
 
@@ -40,6 +40,14 @@ Reads the disc ID from the CD drive (`/dev/sr0` by default), looks it up on Musi
 ### `play`
 
 Identifies the CD, then uses `mpv` for playback and `playerctl` to track position. Scrobbles each track to ListenBrainz when playback ends. Exits when playback stops. Pausing scrobbles the current track — resume and it picks up the next one.
+
+### `cache`
+
+Manually associates the disc ID of the current CD with a MusicBrainz release ID. Useful for unofficial releases, self-burned CDs, or any disc not in the MusicBrainz disc database. Once cached, `lookup` and `play` will find it automatically.
+
+```bash
+cdscrobble cache <release-mbid>
+```
 
 ## Dependencies
 
