@@ -24,10 +24,9 @@ echo "your-token-here" > ~/.lbtoken
 ## Usage
 
 ```
-cdscrobble lookup          # identify CD and print metadata
-cdscrobble play            # identify CD, monitor playback, scrobble
-cdscrobble play --start    # same, but start playback
-cdscrobble scrobble        # daemon: monitor any playback and scrobble
+cdscrobble lookup   # identify CD and print metadata
+cdscrobble play     # identify CD, start playback, scrobble
+cdscrobble play --start    # same, but start mpv playback
 ```
 
 All commands support `-v` for verbose output and `--no-playing-now` to skip playing_now notifications.
@@ -41,10 +40,6 @@ Reads the disc ID from the CD drive (`/dev/sr0` by default), looks it up on Musi
 ### `play`
 
 Identifies the CD, then uses `mpv` for playback and `playerctl` to track position. Scrobbles each track to ListenBrainz when playback ends. Exits when playback stops. Pausing scrobbles the current track — resume and it picks up the next one.
-
-### `scrobble`
-
-Standalone daemon that monitors any MPRIS-compatible player and scrobbles tracks by metadata. Runs indefinitely. (Use `play` for CD playback with mpv and MusicBrainz track data.)
 
 ## Dependencies
 
