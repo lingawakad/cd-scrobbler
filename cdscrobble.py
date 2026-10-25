@@ -1,6 +1,7 @@
 """cdscrobble — Scrobble CD playback to ListenBrainz."""
 
 import argparse
+import re
 import subprocess
 import sys
 import time
@@ -302,6 +303,14 @@ def cmd_cache(args):
     """Read disc ID and cache it against a user-provided release MBID."""
     from musicbrainz import _load_cache, _get_cached, _set_cached
 
+    # Accept full MusicBrainz URL or raw MBID
+    mbid = args.release_mbid
+    if mbid.startswith("http"):
+        mbid = mbid.rstrip("/").split("/")[-1]
+    if not re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", mbid):
+        print(f"Error: invalid release MBID: {args.release_mbid}", file=sys.stderr)
+        sys.exit(1)
+
     try:
         disc_id, _ = get_disc_info(args.device)
     except DiscReadError as e:
@@ -314,14 +323,14 @@ def cmd_cache(args):
     existing = _get_cached(disc_key, cache)
     if existing:
         print(f"Already cached: {disc_key} -> {existing}")
-        if existing != args.release_mbid:
-            print(f"Overwriting with {args.release_mbid}...", file=sys.stderr)
+        if existing != mbid:
+            print(f"Overwriting with {mbid}...", file=sys.stderr)
 
-    _set_cached(disc_key, args.release_mbid, cache)
+    _set_cached(disc_key, mbid, cache)
 
     # Verify by fetching release info
     try:
-        info = get_release_info(args.release_mbid)
+        info = get_release_info(mbid)
         print(f"Cached: {disc_id} -> {info['artist']} — {info['title']}")
     except Exception as e:
         print(f"Cached (verify failed: {e})", file=sys.stderr)
