@@ -43,10 +43,11 @@ Identifies the CD, then uses `mpv` for playback and `playerctl` to track positio
 
 ### `cache`
 
-Manually associates the disc ID of the current CD with a MusicBrainz release ID. Useful for unofficial releases, self-burned CDs, or any disc not in the MusicBrainz disc database. Once cached, `lookup` and `play` will find it automatically.
+Manually associates the disc ID of the current CD with a MusicBrainz release ID. Useful for unofficial releases, self-burned CDs, or any disc not in the MusicBrainz disc database. Once cached, `lookup` and `play` will find it automatically. Accepts a raw MBID or a full MusicBrainz release URL.
 
 ```bash
-cdscrobble cache <release-mbid>
+cdscrobble cache b4296301-7ab9-4fa1-a1d7-18647b7f94a4
+cdscrobble cache https://musicbrainz.org/release/b4296301-7ab9-4fa1-a1d7-18647b7f94a4
 ```
 
 ## Dependencies
