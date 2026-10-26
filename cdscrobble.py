@@ -187,6 +187,18 @@ def cmd_play(args):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if args.verbose:
             print("Playback started", file=sys.stderr)
+        # Wait for mpv to report Playing before monitoring
+        for _ in range(30):  # up to 30s
+            time.sleep(1)
+            try:
+                st = subprocess.run(
+                    ["playerctl", "-p", "mpv", "status"],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout.strip()
+                if st == "Playing":
+                    break
+            except Exception:
+                pass
 
     # Monitor playback and scrobble
     _monitor_and_scrobble(info, args)
@@ -226,12 +238,16 @@ def _monitor_and_scrobble(info: dict, args):
                     if args.verbose:
                         print(f"Scrobble failed: {e}", file=sys.stderr)
 
+    total_duration = track_offsets[-1] if track_offsets else 0
+
     def _current_track(position_s):
         """Map position (seconds) to track number."""
+        if position_s >= total_duration:
+            return len(track_offsets)  # at or past end = last track
         for i in range(len(track_offsets) - 1):
             if track_offsets[i] <= position_s < track_offsets[i + 1]:
                 return i + 1  # track positions are 1-indexed
-        return len(track_offsets)  # last track or beyond
+        return 1  # position 0 or before first track boundary
 
     while True:
         try:
@@ -256,11 +272,6 @@ def _monitor_and_scrobble(info: dict, args):
             except ValueError:
                 pass
 
-            current_track = _current_track(pos_s) if pos_s > 0 else None
-
-            if args.verbose and current_track:
-                print(f"Track {current_track}", file=sys.stderr)
-
             # Detect playback stopped — scrobble current track then exit
             if status == "Stopped" and last_position is not None:
                 _scrobble_track(last_position)
@@ -275,6 +286,15 @@ def _monitor_and_scrobble(info: dict, args):
                 if args.verbose:
                     print("Paused — waiting for resume", file=sys.stderr)
                 continue
+
+            # mpv reports total duration before playback starts; ignore until position drops
+            if pos_s > 0 and pos_s >= total_duration * 0.99 and last_position is None:
+                continue
+
+            current_track = _current_track(pos_s) if pos_s > 0 else None
+
+            if args.verbose and current_track:
+                print(f"Track {current_track}", file=sys.stderr)
 
             # Detect resume from pause
             if status == "Playing" and last_position is not None and start_time is None:
