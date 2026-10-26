@@ -24,12 +24,14 @@ def main():
 
     # lookup: identify CD and print metadata
     p_lookup = sub.add_parser("lookup", help="Identify CD and print metadata")
-    p_lookup.add_argument("-d", "--device", default="/dev/sr0")
+    p_lookup.add_argument("-d", "--device", default=None,
+                          help="CD/DVD device (default: auto-detect)")
     p_lookup.add_argument("-v", "--verbose", action="store_true")
 
     # play: identify CD, start playback, monitor, scrobble
     p_play = sub.add_parser("play", help="Identify CD, start playback, scrobble")
-    p_play.add_argument("-d", "--device", default="/dev/sr0")
+    p_play.add_argument("-d", "--device", default=None,
+                        help="CD/DVD device (default: auto-detect)")
     p_play.add_argument("-v", "--verbose", action="store_true")
     p_play.add_argument("--start", action="store_true",
                         help="Start playback after lookup (playerctl play)")
@@ -38,7 +40,8 @@ def main():
 
     # cache: manually associate a disc ID with a release MBID
     p_cache = sub.add_parser("cache", help="Cache a release MBID for the current disc")
-    p_cache.add_argument("-d", "--device", default="/dev/sr0")
+    p_cache.add_argument("-d", "--device", default=None,
+                         help="CD/DVD device (default: auto-detect)")
     p_cache.add_argument("-v", "--verbose", action="store_true")
     p_cache.add_argument("release_mbid", help="MusicBrainz release ID")
 
@@ -57,12 +60,17 @@ def main():
 
 def cmd_lookup(args):
     """Identify CD and print metadata."""
+    from mbid import get_disc_info, get_cdtext, DiscReadError, find_cd_drive
     from musicbrainz import _load_cache, _get_cached, _set_cached
+
+    device = args.device or find_cd_drive()
+    if args.verbose:
+        print(f"Device: {device}", file=sys.stderr)
 
     disc_id = None
     # Try disc ID lookup
     try:
-        disc_id, toc = get_disc_info(args.device)
+        disc_id, toc = get_disc_info(device)
         if args.verbose:
             print(f"Disc ID: {disc_id}", file=sys.stderr)
 
@@ -92,7 +100,7 @@ def cmd_lookup(args):
         if args.verbose:
             print(f"Disc ID lookup failed: {e}", file=sys.stderr)
             print("Falling back to CD-Text search...", file=sys.stderr)
-        release = _lookup_by_cdtext(args)
+        release = _lookup_by_cdtext(device, args.verbose)
         if release is None:
             sys.exit(1)
 
@@ -116,11 +124,16 @@ def cmd_lookup(args):
 
 def cmd_play(args):
     """Identify CD, start playback via mpv, scrobble tracks."""
+    from mbid import DiscReadError, find_cd_drive
     from musicbrainz import _load_cache, _get_cached, _set_cached
+
+    device = args.device or find_cd_drive()
+    if args.verbose:
+        print(f"Device: {device}", file=sys.stderr)
 
     # Step 1: Read disc ID (fast)
     try:
-        disc_id, toc = get_disc_info(args.device)
+        disc_id, toc = get_disc_info(device)
         if args.verbose:
             print(f"Disc ID: {disc_id}", file=sys.stderr)
     except DiscReadError as e:
@@ -149,7 +162,7 @@ def cmd_play(args):
         except Exception as e:
             if args.verbose:
                 print(f"Disc ID lookup failed: {e}", file=sys.stderr)
-            release = _lookup_by_cdtext(args)
+            release = _lookup_by_cdtext(device, args.verbose)
             if release is None:
                 sys.exit(1)
 
@@ -170,7 +183,7 @@ def cmd_play(args):
     # Start playback if requested
     if args.start:
         subprocess.Popen(["mpv", "--demuxer-max-bytes=5MiB", "--ao=pipewire",
-                          "--gapless-audio", "cdda://"],
+                          "--gapless-audio", f"cdda://{device}"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if args.verbose:
             print("Playback started", file=sys.stderr)
@@ -301,6 +314,7 @@ def _monitor_and_scrobble(info: dict, args):
 
 def cmd_cache(args):
     """Read disc ID and cache it against a user-provided release MBID."""
+    from mbid import DiscReadError, find_cd_drive
     from musicbrainz import _load_cache, _get_cached, _set_cached
 
     # Accept full MusicBrainz URL or raw MBID
@@ -311,8 +325,12 @@ def cmd_cache(args):
         print(f"Error: invalid release MBID: {args.release_mbid}", file=sys.stderr)
         sys.exit(1)
 
+    device = args.device or find_cd_drive()
+    if args.verbose:
+        print(f"Device: {device}", file=sys.stderr)
+
     try:
-        disc_id, _ = get_disc_info(args.device)
+        disc_id, _ = get_disc_info(device)
     except DiscReadError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -336,15 +354,15 @@ def cmd_cache(args):
         print(f"Cached (verify failed: {e})", file=sys.stderr)
 
 
-def _lookup_by_cdtext(args):
+def _lookup_by_cdtext(device, verbose=False):
     """Fallback: search by CD-Text."""
-    cdtext = get_cdtext(args.device)
+    cdtext = get_cdtext(device)
     if not cdtext["performer"] or not cdtext["title"]:
         print("Error: No CD-Text found on disc", file=sys.stderr)
         return None
 
     query = f"{cdtext['performer']} {cdtext['title']}"
-    if args.verbose:
+    if verbose:
         print(f"CD-Text: {query}", file=sys.stderr)
 
     # Check cache for CD-Text -> release MBID
@@ -353,7 +371,7 @@ def _lookup_by_cdtext(args):
     ct_key = f"cdtext:{query}:{len(cdtext['tracks'])}"
     cached_mbid = _get_cached(ct_key, cache)
     if cached_mbid:
-        if args.verbose:
+        if verbose:
             print("Cache hit (CD-Text)", file=sys.stderr)
         info = get_release_info(cached_mbid)
         return {"mbid": cached_mbid, "title": info["title"], "artist": info["artist"]}
@@ -372,7 +390,7 @@ def _lookup_by_cdtext(args):
     # Cache CD-Text -> release MBID
     _set_cached(ct_key, release["mbid"], cache)
 
-    if args.verbose:
+    if verbose:
         print(f"Match (CD-Text): {release['artist']} — {release['title']}",
               file=sys.stderr)
     return {"mbid": release["mbid"], **release}

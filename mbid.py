@@ -2,18 +2,42 @@
 
 import argparse
 import discid
+import glob
 import re
 import subprocess
 import sys
 
-DISC_ID_RE = re.compile(r"^[A-Za-z0-9_\-=\.]+$")
+DISC_ID_RE = re.compile(r"^[A-Za-z0-9_\-=\.\-]+$")
 
 
-def get_disc_info(device: str = "/dev/sr0") -> tuple[str, str]:
+def find_cd_drive() -> str:
+    """Find the first CD/DVD drive with a readable disc.
+
+    Scans /dev/sr* and returns the first device discid can read.
+    Raises DiscReadError if no drive with a disc is found.
+    """
+    drives = sorted(glob.glob("/dev/sr*"))
+    errors = []
+    for dev in drives:
+        try:
+            d = discid.read(device=dev)
+            if len(d.tracks) > 0:
+                return dev
+        except Exception as e:
+            errors.append(f"{dev}: {e}")
+    raise DiscReadError(
+        f"No CD drive with disc found. Tried: {', '.join(errors) or 'none'}"
+    )
+
+
+def get_disc_info(device: str | None = None) -> tuple[str, str]:
     """Read the CD and return (disc_id, toc_string).
 
+    If *device* is None, auto-detects the first drive with a readable disc.
     Raises DiscReadError on failure.
     """
+    if device is None:
+        device = find_cd_drive()
     try:
         d = discid.read(device=device)
     except discid.DiscError as e:
@@ -30,12 +54,15 @@ def get_disc_info(device: str = "/dev/sr0") -> tuple[str, str]:
     return d.id, d.toc_string
 
 
-def get_cdtext(device: str = "/dev/sr0") -> dict:
+def get_cdtext(device: str | None = None) -> dict:
     """Read CD-Text from the disc via cd-info.
 
+    If *device* is None, auto-detects the first drive with a readable disc.
     Returns dict with keys: title, performer, tracks (list of str).
     Empty strings/list if no CD-Text or cd-info unavailable.
     """
+    if device is None:
+        device = find_cd_drive()
     try:
         result = subprocess.run(
             ["cd-info", device], capture_output=True, text=True, timeout=10)
@@ -69,13 +96,15 @@ class DiscReadError(RuntimeError):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--device", default="/dev/sr0")
+    parser.add_argument("-d", "--device", default=None,
+                        help="CD/DVD device (default: auto-detect)")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
     try:
         disc_id, toc = get_disc_info(args.device)
         if args.verbose:
+            print(f"DEVICE: {args.device or find_cd_drive()}", file=sys.stderr)
             print(f"DISC_ID: {disc_id}", file=sys.stderr)
             print(f"TOC: {toc}", file=sys.stderr)
         print(disc_id)
