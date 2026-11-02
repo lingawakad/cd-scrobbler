@@ -16,12 +16,17 @@ def _mpv_request(sock_path: str, command: list, timeout: float = 5) -> dict:
     req = {"command": command}
     data = json.dumps(req).encode() + b"\n"
 
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(timeout)
         s.connect(sock_path)
+    except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
+        raise ConnectionError(f"Cannot connect to mpv at {sock_path}: {e}")
+
+    try:
         s.sendall(data)
 
-        # Read response (mpv sends length-prefixed or newline-delimited JSON)
+        # Read response (mpv sends newline-delimited JSON)
         chunks = []
         while True:
             try:
@@ -38,6 +43,8 @@ def _mpv_request(sock_path: str, command: list, timeout: float = 5) -> dict:
         # mpv may send multiple JSON objects (events); parse the first one
         resp, _ = json.JSONDecoder().raw_decode(response)
         return resp
+    finally:
+        s.close()
 
 
 def mpv_get_property(sock_path: str, prop: str, timeout: float = 5):
