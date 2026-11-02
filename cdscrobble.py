@@ -2,6 +2,7 @@
 
 import argparse
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -188,7 +189,8 @@ def cmd_play(args):
         if args.verbose:
             print("Playback started", file=sys.stderr)
         # Wait for mpv to report Playing before monitoring
-        for _ in range(30):  # up to 30s
+        started = False
+        for i in range(30):
             time.sleep(1)
             try:
                 st = subprocess.run(
@@ -196,9 +198,14 @@ def cmd_play(args):
                     capture_output=True, text=True, timeout=5,
                 ).stdout.strip()
                 if st == "Playing":
+                    started = True
                     break
             except Exception:
                 pass
+        if not started:
+            print("Warning: mpv did not report 'Playing' status within 30s — "
+                  "continuing anyway (may be a playerctl identity issue)",
+                  file=sys.stderr)
 
     # Monitor playback and scrobble
     _monitor_and_scrobble(info, args)
@@ -249,87 +256,110 @@ def _monitor_and_scrobble(info: dict, args):
                 return i + 1  # track positions are 1-indexed
         return 1  # position 0 or before first track boundary
 
-    while True:
-        try:
-            # Get playback status and position
-            status_result = subprocess.run(
-                ["playerctl", "-p", "mpv", "status"],
-                capture_output=True, text=True, timeout=5,
-            )
-            pos_result = subprocess.run(
-                ["playerctl", "-p", "mpv", "position"],
-                capture_output=True, text=True, timeout=5,
-            )
-            status = status_result.stdout.strip()
-            # If playerctl returns empty/error, player exited — scrobble and exit
-            if not status and last_position is not None:
-                _scrobble_track(last_position)
-                break
+    try:
+        # Try the explicit mpv player filter first; fall back to no filter
+        # if playerctl can't find "mpv" (PipeWire MPRIS identity varies).
+        player_filter = ["-p", "mpv"]
 
-            pos_s = 0.0
+        while True:
             try:
-                pos_s = float(pos_result.stdout.strip())
-            except ValueError:
-                pass
+                # Get playback status and position
+                status_result = subprocess.run(
+                    ["playerctl"] + player_filter + ["status"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                pos_result = subprocess.run(
+                    ["playerctl"] + player_filter + ["position"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                status = status_result.stdout.strip()
 
-            # Detect playback stopped — scrobble current track then exit
-            if status == "Stopped" and last_position is not None:
-                _scrobble_track(last_position)
-                last_position = None
-                start_time = None
-                break
+                # If playerctl returns empty with the mpv filter, try without it
+                if not status and player_filter:
+                    player_filter = []
+                    if args.verbose:
+                        print("playerctl: mpv filter failed, trying without filter",
+                              file=sys.stderr)
+                    continue
 
-            # Detect pause — scrobble current track, stay alive for resume
-            if status == "Paused" and last_position is not None:
-                _scrobble_track(last_position)
-                start_time = None
-                if args.verbose:
-                    print("Paused — waiting for resume", file=sys.stderr)
-                continue
-
-            # mpv reports total duration before playback starts; ignore until position drops
-            if pos_s > 0 and pos_s >= total_duration * 0.99 and last_position is None:
-                continue
-
-            current_track = _current_track(pos_s) if pos_s > 0 else None
-
-            if args.verbose and current_track:
-                print(f"Track {current_track}", file=sys.stderr)
-
-            # Detect resume from pause
-            if status == "Playing" and last_position is not None and start_time is None:
-                start_time = time.time()
-                if args.verbose:
-                    print("Resumed", file=sys.stderr)
-
-            # Detect track change
-            if current_track is not None and current_track != last_position:
-                # Scrobble previous track
-                if last_position is not None:
+                # If playerctl returns empty/error, player exited — scrobble and exit
+                if not status and last_position is not None:
                     _scrobble_track(last_position)
+                    break
 
-                # New track started — record when this track began
-                start_time = time.time()
-                last_position = current_track
+                pos_s = 0.0
+                try:
+                    pos_s = float(pos_result.stdout.strip())
+                except ValueError:
+                    pass
 
-                # Submit playing_now
-                if not args.no_playing_now:
-                    track = tracks_by_pos.get(current_track, {})
-                    track.setdefault("album", info["title"])
-                    track.setdefault("artist", info["artist"])
-                    track.setdefault("release_mbid", info.get("release_mbid", ""))
-                    try:
-                        submit_playing_now(track)
-                        if args.verbose:
-                            print(f"Now: {track.get('title', current_track)}", file=sys.stderr)
-                    except Exception as e:
-                        if args.verbose:
-                            print(f"playing_now failed: {e}", file=sys.stderr)
+                # Detect playback stopped — scrobble current track then exit
+                if status == "Stopped" and last_position is not None:
+                    _scrobble_track(last_position)
+                    last_position = None
+                    start_time = None
+                    break
 
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-            pass
+                # Detect pause — scrobble current track, stay alive for resume
+                if status == "Paused" and last_position is not None:
+                    _scrobble_track(last_position)
+                    start_time = None
+                    if args.verbose:
+                        print("Paused — waiting for resume", file=sys.stderr)
+                    continue
 
-        time.sleep(2)
+                # mpv reports total duration before playback starts; ignore until position drops
+                if pos_s > 0 and pos_s >= total_duration * 0.99 and last_position is None:
+                    continue
+
+                current_track = _current_track(pos_s) if pos_s > 0 else None
+
+                if args.verbose and current_track:
+                    print(f"Track {current_track}", file=sys.stderr)
+
+                # Detect resume from pause
+                if status == "Playing" and last_position is not None and start_time is None:
+                    start_time = time.time()
+                    if args.verbose:
+                        print("Resumed", file=sys.stderr)
+
+                # Detect track change
+                if current_track is not None and current_track != last_position:
+                    # Scrobble previous track
+                    if last_position is not None:
+                        _scrobble_track(last_position)
+
+                    # New track started — record when this track began
+                    start_time = time.time()
+                    last_position = current_track
+
+                    # Submit playing_now
+                    if not args.no_playing_now:
+                        track = tracks_by_pos.get(current_track, {})
+                        track.setdefault("album", info["title"])
+                        track.setdefault("artist", info["artist"])
+                        track.setdefault("release_mbid", info.get("release_mbid", ""))
+                        try:
+                            submit_playing_now(track)
+                            if args.verbose:
+                                print(f"Now: {track.get('title', current_track)}", file=sys.stderr)
+                        except Exception as e:
+                            if args.verbose:
+                                print(f"playing_now failed: {e}", file=sys.stderr)
+
+            except (subprocess.TimeoutExpired, subprocess.SubprocessError):
+                pass
+            except Exception as e:
+                if args.verbose:
+                    print(f"Unexpected error in monitor loop: {e}", file=sys.stderr)
+
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        if last_position is not None:
+            _scrobble_track(last_position)
+        if args.verbose:
+            print("\nInterrupted", file=sys.stderr)
 
 
 def cmd_cache(args):

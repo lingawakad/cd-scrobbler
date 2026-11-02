@@ -53,7 +53,7 @@ def submit_listen(track: dict, listened_at: int) -> None:
         metadata["recording_mbid"] = track["recording_mbid"]
     if track.get("length_ms"):
         metadata["duration_ms"] = track["length_ms"]
-    metadata["media_player"] = "Strawberry"
+    metadata["media_player"] = "cd-scrobbler"
     metadata["submission_client"] = "cd-scrobbler"
 
     payload = [{

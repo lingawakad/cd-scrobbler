@@ -13,6 +13,7 @@ MBID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 
 CACHE_DIR = Path.home() / ".cache" / "cd-scrobbler"
 CACHE_FILE = CACHE_DIR / "musicbrainz.json"
+CACHE_MAX_ENTRIES = 500
 _toc_score_cache: dict[str, float] = {}
 
 
@@ -24,6 +25,11 @@ def _load_cache() -> dict:
 
 
 def _save_cache(cache: dict) -> None:
+    # Trim oldest entries if cache exceeds limit (simple FIFO)
+    if len(cache) > CACHE_MAX_ENTRIES:
+        keys = list(cache.keys())
+        for k in keys[:len(cache) - CACHE_MAX_ENTRIES]:
+            del cache[k]
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
@@ -139,6 +145,7 @@ def find_release(disc_id: str, toc: str | None = None) -> dict:
         raise LookupError(
             f"Ambiguous disc ID ({len(candidates)} matches) — provide TOC")
 
+    _toc_score_cache.clear()  # Reset for this lookup
     _, toc_lengths = _parse_toc(toc)
     best = max(candidates, key=lambda c: _toc_score(c["mbid"], toc_lengths))
     best_score = _toc_score_cache.get(best["mbid"], 0)
@@ -220,12 +227,21 @@ def get_release_info(release_mbid: str) -> dict:
         for track in medium.get("track-list", []):
             rec = track.get("recording", {})
             rac = rec.get("artist-credit", [])
+            track_artist = ""
+            track_artist_mbid = ""
+            if rac:
+                entry = rac[0]
+                if isinstance(entry, dict) and "artist" in entry:
+                    track_artist = entry["artist"].get("name", "")
+                    track_artist_mbid = entry["artist"].get("id", "")
+                elif isinstance(entry, str):
+                    track_artist = entry
             tracks.append({
                 "position": track["position"],
                 "title": rec.get("title", ""),
                 "length_ms": int(track.get("length") or 0),
-                "artist": rac[0]["artist"]["name"] if rac else artist,
-                "artist_mbid": rac[0]["artist"]["id"] if rac else artist_mbid,
+                "artist": track_artist or artist,
+                "artist_mbid": track_artist_mbid or artist_mbid,
                 "recording_mbid": rec.get("id", ""),
             })
 
