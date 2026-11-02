@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from config import load_config, get_device, is_verbose, get_mpv_socket, no_playing_now
+from config import load_config, get_device, is_verbose, get_mpv_socket, no_playing_now, get_listenbrainz_token
 from mbid import get_disc_info, get_cdtext, DiscReadError
 from musicbrainz import (
     find_release,
@@ -71,10 +71,12 @@ def main():
     # Merge CLI args with config: CLI takes precedence
     verbose = args.verbose or is_verbose(cfg)
 
+    cfg_token = get_listenbrainz_token(cfg)
+
     # Flush any pending queue entries at startup
     if hasattr(args, 'command') and args.command != "queue":
         try:
-            ok, remaining = flush_queue(lambda e: _submit_queued(e))
+            ok, remaining = flush_queue(lambda e: _submit_queued(e, cfg_token))
             if ok and verbose:
                 print(f"Flushed {ok} queued scrobble(s)", file=sys.stderr)
             if remaining and verbose:
@@ -86,25 +88,25 @@ def main():
     if args.command == "lookup":
         cmd_lookup(args, verbose, cfg)
     elif args.command == "play":
-        cmd_play(args, verbose, cfg)
+        cmd_play(args, verbose, cfg, cfg_token)
     elif args.command == "cache":
         cmd_cache(args, verbose, cfg)
     elif args.command == "history":
         cmd_history(args)
     elif args.command == "queue":
-        cmd_queue(args, verbose)
+        cmd_queue(args, verbose, cfg)
     else:
         parser.print_help()
         sys.exit(1)
 
 
-def _submit_queued(entry: dict) -> None:
+def _submit_queued(entry: dict, config_token=None) -> None:
     """Submit a queued scrobble entry."""
     listen_type = entry.get("listen_type", "single")
     if listen_type == "single":
-        submit_listen(entry["track"], entry["listened_at"])
+        submit_listen(entry["track"], entry["listened_at"], config_token)
     elif listen_type == "playing_now":
-        submit_playing_now(entry["track"])
+        submit_playing_now(entry["track"], config_token)
 
 
 def cmd_lookup(args, verbose, cfg):
@@ -171,7 +173,7 @@ def cmd_lookup(args, verbose, cfg):
         sys.exit(1)
 
 
-def cmd_play(args, verbose, cfg):
+def cmd_play(args, verbose, cfg, cfg_token=None):
     """Identify CD, start playback via mpv, scrobble tracks."""
     from mbid import DiscReadError, find_cd_drive
     from musicbrainz import _load_cache, _get_cached, _set_cached
@@ -255,10 +257,10 @@ def cmd_play(args, verbose, cfg):
             print("Warning: mpv did not start within 30s", file=sys.stderr)
 
     # Monitor playback and scrobble
-    _monitor_and_scrobble(info, sock_path, verbose, no_playing)
+    _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg_token)
 
 
-def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool):
+def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool, config_token=None):
     """Monitor mpv via IPC socket and scrobble tracks using known track list."""
     tracks_by_pos = {int(t["position"]): t for t in info["tracks"]}
     # Calculate track offsets (cumulative) in seconds
@@ -284,7 +286,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 track.setdefault("artist", info["artist"])
                 track.setdefault("release_mbid", info.get("release_mbid", ""))
                 try:
-                    submit_listen(track, int(start_time))
+                    submit_listen(track, int(start_time), config_token)
                     if verbose:
                         print(f"Scrobbled: {track.get('title', position)}", file=sys.stderr)
                     scrobbled.add(position)
@@ -364,7 +366,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         track.setdefault("artist", info["artist"])
                         track.setdefault("release_mbid", info.get("release_mbid", ""))
                         try:
-                            submit_playing_now(track)
+                            submit_playing_now(track, config_token)
                             if verbose:
                                 print(f"Now: {track.get('title', current_track)}", file=sys.stderr)
                         except Exception as e:
@@ -484,13 +486,14 @@ def cmd_history(args):
         print(f"{dt}  {artist} — {title}{album_str}")
 
 
-def cmd_queue(args, verbose):
+def cmd_queue(args, verbose, cfg):
     """Show or flush the offline queue."""
     size = queue_size()
     print(f"Queue: {size} pending entry/entries")
 
     if args.flush:
-        ok, remaining = flush_queue(lambda e: _submit_queued(e))
+        cfg_token = get_listenbrainz_token(cfg)
+        ok, remaining = flush_queue(lambda e: _submit_queued(e, cfg_token))
         if ok:
             print(f"Flushed: {ok} scrobble(s) submitted")
         if remaining:

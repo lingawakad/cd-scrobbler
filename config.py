@@ -7,10 +7,11 @@ CONFIG_DIR = Path.home() / ".config" / "cd-scrobbler"
 CONFIG_FILE = CONFIG_DIR / "config"
 
 DEFAULTS = {
-    "device": "",          # CD/DVD device (empty = auto-detect)
+    "device": "",
     "verbose": "false",
-    "mpv_socket": "",      # mpv IPC socket path (empty = auto)
+    "mpv_socket": "",
     "no_playing_now": "false",
+    "listenbrainz_token": "",
 }
 
 
@@ -67,3 +68,8 @@ def get_mpv_socket(config: dict) -> str | None:
 
 def no_playing_now(config: dict) -> bool:
     return config.get("no_playing_now", "false").lower() == "true"
+
+
+def get_listenbrainz_token(config: dict) -> str | None:
+    """Return the configured ListenBrainz token, or None."""
+    return config.get("listenbrainz_token", "").strip() or None

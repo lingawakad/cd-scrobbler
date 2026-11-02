@@ -44,6 +44,7 @@ device = /dev/sr1
 verbose = true
 mpv_socket = /tmp/mpvsocket
 no_playing_now = false
+listenbrainz_token = your-token-here
 ```
 
 CLI arguments override config file values.

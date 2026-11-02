@@ -17,7 +17,10 @@ TOKEN_FILE = Path.home() / ".lbtoken"
 USER_AGENT = "cd-scrobbler/0.2.0 (recent8571@proton.me)"
 
 
-def _get_token() -> str:
+def _get_token(config_token: str | None = None) -> str:
+    # Config file token takes precedence
+    if config_token:
+        return config_token
     try:
         raw = TOKEN_FILE.read_text().strip()
         # Handle LB_USER_TOKEN=<token> format
@@ -27,18 +30,19 @@ def _get_token() -> str:
     except FileNotFoundError:
         raise LookupError(
             f"ListenBrainz token not found at {TOKEN_FILE} — "
-            "get one from https://listenbrainz.org/settings/"
+            "get one from https://listenbrainz.org/settings/ "
+            "or add listenbrainz_token to ~/.config/cd-scrobbler/config"
         )
 
 
-def submit_listen(track: dict, listened_at: int) -> None:
+def submit_listen(track: dict, listened_at: int, config_token: str | None = None) -> None:
     """Submit a single listen to ListenBrainz.
 
     track: dict with keys — artist, title, album, artist_mbid,
            release_mbid, recording_mbid, length_ms (optional).
     listened_at: Unix timestamp of when playback started.
     """
-    token = _get_token()
+    token = _get_token(config_token)
 
     metadata = {
         "artist_name": track["artist"],
@@ -70,9 +74,9 @@ def submit_listen(track: dict, listened_at: int) -> None:
     resp.raise_for_status()
 
 
-def submit_playing_now(track: dict) -> str:
+def submit_playing_now(track: dict, config_token: str | None = None) -> str:
     """Submit a playing_now notification. Returns recording_msid."""
-    token = _get_token()
+    token = _get_token(config_token)
 
     payload = [{
         "track_metadata": {
