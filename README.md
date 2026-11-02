@@ -29,7 +29,16 @@ cdscrobble play --start        # identify CD, start mpv playback, scrobble
 cdscrobble cache <release-mbid>  # cache a release MBID for the current disc
 ```
 
-All commands support `-d` (device, default `/dev/sr0`), `-v` (verbose), and `--no-playing-now` (play only).
+All commands support `-d` (device, default auto-detected), `-v` (verbose), and `--no-playing-now` (play only).
+
+## Features
+
+- Disc ID lookup with MusicBrainz, CD-Text fallback
+- Automatic cache for disc ID → release MBID mapping
+- 20 MiB read-ahead buffer for scratched/problematic discs
+- Ctrl+C gracefully scrobbles the current track
+- Player identity fallback if `playerctl -p mpv` fails
+- Cache capped at 500 entries (FIFO eviction)
 
 ## Commands
 

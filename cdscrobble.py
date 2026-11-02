@@ -183,7 +183,7 @@ def cmd_play(args):
 
     # Start playback if requested
     if args.start:
-        subprocess.Popen(["mpv", "--demuxer-max-bytes=20MiB", "--audio-buffer=1000",
+        subprocess.Popen(["mpv", "--demuxer-max-bytes=20MiB",
                           "--ao=pipewire", "--gapless-audio", f"cdda://{device}"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if args.verbose:
