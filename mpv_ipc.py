@@ -8,9 +8,6 @@ from pathlib import Path
 
 
 def _get_default_socket() -> str:
-    rdir = os.environ.get("XDG_RUNTIME_DIR", "")
-    if rdir:
-        return str(Path(rdir) / "mpv" / "socket")
     return "/tmp/mpvsocket"
 
 

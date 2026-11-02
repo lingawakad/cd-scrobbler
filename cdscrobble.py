@@ -254,6 +254,8 @@ def cmd_play(args, verbose, cfg, cfg_token=None):
 
     # Start playback if requested
     if args.start:
+        # Ensure parent directory exists for the IPC socket
+        Path(sock_path).parent.mkdir(parents=True, exist_ok=True)
         subprocess.Popen(
             ["mpv", "--demuxer-max-bytes=20MiB",
              "--input-ipc-server=" + sock_path,
