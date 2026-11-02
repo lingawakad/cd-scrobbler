@@ -66,6 +66,14 @@ def main():
                          help="Attempt to flush the queue now")
     p_queue.add_argument("-v", "--verbose", action="store_true")
 
+    # control: pause, play, stop mpv playback
+    p_control = sub.add_parser("control", help="Control mpv playback (pause/play/stop)")
+    p_control.add_argument("action", choices=["pause", "play", "stop"],
+                           help="Action to perform")
+    p_control.add_argument("--socket", default=None,
+                           help="mpv IPC socket path (default: auto)")
+    p_control.add_argument("-v", "--verbose", action="store_true")
+
     args = parser.parse_args()
 
     # Merge CLI args with config: CLI takes precedence
@@ -95,6 +103,8 @@ def main():
         cmd_history(args)
     elif args.command == "queue":
         cmd_queue(args, verbose, cfg)
+    elif args.command == "control":
+        cmd_control(args, cfg)
     else:
         parser.print_help()
         sys.exit(1)
@@ -500,6 +510,30 @@ def cmd_queue(args, verbose, cfg):
             print(f"Remaining: {remaining} (will retry next run)")
         else:
             print("Queue is now empty")
+
+
+def cmd_control(args, cfg):
+    """Control mpv playback via IPC."""
+    from mpv_ipc import _get_default_socket, mpv_command, mpv_get_property
+
+    sock_path = args.socket or get_mpv_socket(cfg) or _get_default_socket()
+
+    try:
+        if args.action == "pause":
+            mpv_command(sock_path, "set_property", "pause", "yes")
+            print("Paused")
+        elif args.action == "play":
+            mpv_command(sock_path, "set_property", "pause", "no")
+            print("Playing")
+        elif args.action == "stop":
+            mpv_command(sock_path, "stop")
+            print("Stopped")
+    except ConnectionError:
+        print(f"Error: cannot connect to mpv at {sock_path}", file=sys.stderr)
+        sys.exit(1)
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _lookup_by_cdtext(device, verbose=False):

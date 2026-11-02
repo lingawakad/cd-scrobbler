@@ -30,6 +30,9 @@ cdscrobble cache <release-mbid>  # cache a release MBID for the current disc
 cdscrobble history             # show recent scrobbles from ListenBrainz
 cdscrobble queue               # show offline queue status
 cdscrobble queue --flush       # attempt to flush the offline queue
+cdscrobble control pause        # pause mpv playback
+cdscrobble control play         # resume mpv playback
+cdscrobble control stop         # stop mpv playback
 ```
 
 All commands support `-d` (device, default auto-detected), `-v` (verbose), and `--no-playing-now` (play only).
@@ -98,6 +101,18 @@ Shows the offline queue status. Use `--flush` to attempt submitting any queued s
 cdscrobble queue
 cdscrobble queue --flush
 ```
+
+### `control`
+
+Pause, resume, or stop mpv playback via the IPC socket. Requires mpv to be running with `--input-ipc-server` (automatic when using `play --start`).
+
+```bash
+cdscrobble control pause
+cdscrobble control play
+cdscrobble control stop
+```
+
+Use `--socket` to specify the socket path if it differs from the default.
 
 ## Dependencies
 
