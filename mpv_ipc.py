@@ -35,7 +35,9 @@ def _mpv_request(sock_path: str, command: list, timeout: float = 5) -> dict:
         response = b"".join(chunks).decode().strip()
         if not response:
             raise ConnectionError("mpv returned empty response")
-        return json.loads(response)
+        # mpv may send multiple JSON objects (events); parse the first one
+        resp, _ = json.JSONDecoder().raw_decode(response)
+        return resp
 
 
 def mpv_get_property(sock_path: str, prop: str, timeout: float = 5):
