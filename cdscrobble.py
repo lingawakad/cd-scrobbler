@@ -11,6 +11,10 @@ from pathlib import Path
 
 from config import load_config, get_device, is_verbose, get_mpv_socket, no_playing_now, get_listenbrainz_token
 from mbid import get_disc_info, get_cdtext, DiscReadError
+from mpv_ipc import (
+    _get_default_socket, wait_for_mpv,
+    mpv_get_status, mpv_get_position, mpv_command,
+)
 from musicbrainz import (
     find_release,
     find_release_by_search,
@@ -187,10 +191,6 @@ def cmd_play(args, verbose, cfg, cfg_token=None):
     """Identify CD, start playback via mpv, scrobble tracks."""
     from mbid import DiscReadError, find_cd_drive
     from musicbrainz import _load_cache, _get_cached, _set_cached
-    from mpv_ipc import (
-        _get_default_socket, wait_for_mpv, is_mpv_ready,
-        mpv_get_status, mpv_get_position,
-    )
 
     device = args.device or get_device(cfg) or find_cd_drive()
     if verbose:
@@ -514,8 +514,6 @@ def cmd_queue(args, verbose, cfg):
 
 def cmd_control(args, cfg):
     """Control mpv playback via IPC."""
-    from mpv_ipc import _get_default_socket, mpv_command, mpv_get_property
-
     sock_path = args.socket or get_mpv_socket(cfg) or _get_default_socket()
 
     try:
