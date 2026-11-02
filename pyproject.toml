@@ -34,4 +34,4 @@ Homepage = "https://codeberg.org/lingawakad/cd-scrobbler"
 cdscrobble = "cdscrobble:main"
 
 [tool.setuptools]
-py-modules = ["cdscrobble", "mbid", "musicbrainz", "listenbrainz"]
+py-modules = ["cdscrobble", "mbid", "musicbrainz", "listenbrainz", "config", "mpv_ipc", "offline_queue"]

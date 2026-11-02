@@ -1,6 +1,6 @@
 # cd-scrobbler
 
-Scrobble CD playback to ListenBrainz.
+Scrobble CD playback to ListenBrainz with mpv.
 
 ## Install
 
@@ -27,17 +27,36 @@ echo "your-token-here" > ~/.lbtoken
 cdscrobble lookup              # identify CD and print metadata
 cdscrobble play --start        # identify CD, start mpv playback, scrobble
 cdscrobble cache <release-mbid>  # cache a release MBID for the current disc
+cdscrobble history             # show recent scrobbles from ListenBrainz
+cdscrobble queue               # show offline queue status
+cdscrobble queue --flush       # attempt to flush the offline queue
 ```
 
 All commands support `-d` (device, default auto-detected), `-v` (verbose), and `--no-playing-now` (play only).
+
+## Config
+
+Create `~/.config/cd-scrobbler/config`:
+
+```ini
+[general]
+device = /dev/sr1
+verbose = true
+mpv_socket = /tmp/mpvsocket
+no_playing_now = false
+```
+
+CLI arguments override config file values.
 
 ## Features
 
 - Disc ID lookup with MusicBrainz, CD-Text fallback
 - Automatic cache for disc ID → release MBID mapping
 - 20 MiB read-ahead buffer for scratched/problematic discs
+- Direct mpv IPC control (no playerctl/MPRIS dependency)
+- Offline queue: failed scrobbles retry on next run
 - Ctrl+C gracefully scrobbles the current track
-- Player identity fallback if `playerctl -p mpv` fails
+- History command: view recent scrobbles from ListenBrainz
 - Cache capped at 500 entries (FIFO eviction)
 
 ## Commands
@@ -48,7 +67,9 @@ Reads the disc ID from the CD drive (`/dev/sr0` by default), looks it up on Musi
 
 ### `play`
 
-Identifies the CD, then uses `mpv` for playback and `playerctl` to track position. Scrobbles each track to ListenBrainz when playback ends. Exits when playback stops. Pausing scrobbles the current track — resume and it picks up the next one.
+Identifies the CD, then uses `mpv` for playback with direct IPC control. Scrobbles each track to ListenBrainz when playback ends. Exits when playback stops. Pausing scrobbles the current track — resume and it picks up the next one.
+
+With `--start`, launches mpv with `--input-ipc-server` for direct communication (no MPRIS/playerctl needed).
 
 ### `cache`
 
@@ -59,11 +80,28 @@ cdscrobble cache b4296301-7ab9-4fa1-a1d7-18647b7f94a4
 cdscrobble cache https://musicbrainz.org/release/b4296301-7ab9-4fa1-a1d7-18647b7f94a4
 ```
 
+### `history`
+
+Shows your recent scrobbles from ListenBrainz. Defaults to 10 entries; use `-n` to change.
+
+```bash
+cdscrobble history
+cdscrobble history -n 25
+```
+
+### `queue`
+
+Shows the offline queue status. Use `--flush` to attempt submitting any queued scrobbles immediately.
+
+```bash
+cdscrobble queue
+cdscrobble queue --flush
+```
+
 ## Dependencies
 
 - `musicbrainzngs` — MusicBrainz API
 - `discid` — CD disc ID reading
 - `requests` — ListenBrainz API
-- `playerctl` — MPRIS playback monitoring (system package)
 - `mpv` — CD playback with read-ahead buffer (system package)
 - `cd-info` — CD-Text fallback (system package, optional)

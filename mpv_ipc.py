@@ -1,0 +1,100 @@
+"""mpv IPC: communicate with mpv via JSON IPC socket."""
+
+import json
+import os
+import socket
+import time
+from pathlib import Path
+
+
+def _get_default_socket() -> str:
+    rdir = os.environ.get("XDG_RUNTIME_DIR", "")
+    if rdir:
+        return str(Path(rdir) / "mpv" / "socket")
+    return "/tmp/mpvsocket"
+
+
+def _mpv_request(sock_path: str, command: list, timeout: float = 5) -> dict:
+    """Send a JSON IPC request to mpv and return the response."""
+    req = {"command": command}
+    data = json.dumps(req).encode() + b"\n"
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        s.connect(sock_path)
+        s.sendall(data)
+
+        # Read response (mpv sends length-prefixed or newline-delimited JSON)
+        chunks = []
+        while True:
+            try:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            except socket.timeout:
+                break
+
+        response = b"".join(chunks).decode().strip()
+        if not response:
+            raise ConnectionError("mpv returned empty response")
+        return json.loads(response)
+
+
+def mpv_get_property(sock_path: str, prop: str, timeout: float = 5):
+    """Get an mpv property (e.g. 'pause', 'time-pos', 'duration')."""
+    resp = _mpv_request(sock_path, ["get_property", prop], timeout)
+    if resp.get("error") == "success":
+        return resp.get("data")
+    raise RuntimeError(f"mpv get_property({prop!r}) failed: {resp.get('error')}")
+
+
+def mpv_command(sock_path: str, *args, timeout: float = 5) -> None:
+    """Send a command to mpv (e.g. 'play', 'pause', 'stop', 'seek', 120)."""
+    resp = _mpv_request(sock_path, list(args), timeout)
+    if resp.get("error") != "success":
+        raise RuntimeError(f"mpv command {list(args)} failed: {resp.get('error')}")
+
+
+def mpv_get_status(sock_path: str) -> str:
+    """Return 'Playing', 'Paused', or 'Stopped'."""
+    paused = mpv_get_property(sock_path, "pause")
+    if paused:
+        return "Paused"
+    # Check if playback ended
+    eof_reached = mpv_get_property(sock_path, "eof-reached")
+    if eof_reached:
+        return "Stopped"
+    return "Playing"
+
+
+def mpv_get_position(sock_path: str) -> float:
+    """Return current playback position in seconds."""
+    return float(mpv_get_property(sock_path, "time-pos") or 0)
+
+
+def mpv_get_duration(sock_path: str) -> float:
+    """Return total duration in seconds."""
+    return float(mpv_get_property(sock_path, "duration") or 0)
+
+
+def wait_for_mpv(sock_path: str, timeout: int = 30, verbose: bool = False) -> bool:
+    """Wait until mpv is ready and playing. Returns True if successful."""
+    for i in range(timeout):
+        time.sleep(1)
+        try:
+            status = mpv_get_status(sock_path)
+            if status == "Playing":
+                return True
+        except (ConnectionError, FileNotFoundError, OSError, RuntimeError):
+            pass
+    return False
+
+
+def is_mpv_ready(sock_path: str) -> bool:
+    """Check if mpv is accepting IPC connections."""
+    try:
+        mpv_get_property(sock_path, "pause")
+        return True
+    except Exception:
+        return False

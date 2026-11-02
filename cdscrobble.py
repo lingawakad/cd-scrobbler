@@ -1,12 +1,15 @@
 """cdscrobble — Scrobble CD playback to ListenBrainz."""
 
 import argparse
+import json
 import re
 import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
+from config import load_config, get_device, is_verbose, get_mpv_socket, no_playing_now
 from mbid import get_disc_info, get_cdtext, DiscReadError
 from musicbrainz import (
     find_release,
@@ -15,9 +18,12 @@ from musicbrainz import (
     get_release_info,
 )
 from listenbrainz import submit_listen, submit_playing_now
+from offline_queue import enqueue, flush_queue, queue_size
 
 
 def main():
+    cfg = load_config()
+
     parser = argparse.ArgumentParser(
         description="Scrobble CD playback to ListenBrainz",
     )
@@ -35,9 +41,11 @@ def main():
                         help="CD/DVD device (default: auto-detect)")
     p_play.add_argument("-v", "--verbose", action="store_true")
     p_play.add_argument("--start", action="store_true",
-                        help="Start playback after lookup (playerctl play)")
+                        help="Start playback after lookup (mpv)")
     p_play.add_argument("--no-playing-now", action="store_true",
                         help="Skip playing_now notifications")
+    p_play.add_argument("--socket", default=None,
+                        help="mpv IPC socket path (default: auto)")
 
     # cache: manually associate a disc ID with a release MBID
     p_cache = sub.add_parser("cache", help="Cache a release MBID for the current disc")
@@ -46,33 +54,73 @@ def main():
     p_cache.add_argument("-v", "--verbose", action="store_true")
     p_cache.add_argument("release_mbid", help="MusicBrainz release ID")
 
+    # history: show recent scrobbles from ListenBrainz
+    p_history = sub.add_parser("history", help="Show recent scrobbles")
+    p_history.add_argument("-n", "--count", type=int, default=10,
+                           help="Number of recent scrobbles to show (default: 10)")
+    p_history.add_argument("-v", "--verbose", action="store_true")
+
+    # queue: show or flush the offline queue
+    p_queue = sub.add_parser("queue", help="Show or flush offline queue")
+    p_queue.add_argument("--flush", action="store_true",
+                         help="Attempt to flush the queue now")
+    p_queue.add_argument("-v", "--verbose", action="store_true")
+
     args = parser.parse_args()
 
+    # Merge CLI args with config: CLI takes precedence
+    verbose = args.verbose or is_verbose(cfg)
+
+    # Flush any pending queue entries at startup
+    if hasattr(args, 'command') and args.command != "queue":
+        try:
+            ok, remaining = flush_queue(lambda e: _submit_queued(e))
+            if ok and verbose:
+                print(f"Flushed {ok} queued scrobble(s)", file=sys.stderr)
+            if remaining and verbose:
+                print(f"Queue: {remaining} entry/entries remaining", file=sys.stderr)
+        except Exception as e:
+            if verbose:
+                print(f"Queue flush error: {e}", file=sys.stderr)
+
     if args.command == "lookup":
-        cmd_lookup(args)
+        cmd_lookup(args, verbose, cfg)
     elif args.command == "play":
-        cmd_play(args)
+        cmd_play(args, verbose, cfg)
     elif args.command == "cache":
-        cmd_cache(args)
+        cmd_cache(args, verbose, cfg)
+    elif args.command == "history":
+        cmd_history(args)
+    elif args.command == "queue":
+        cmd_queue(args, verbose)
     else:
         parser.print_help()
         sys.exit(1)
 
 
-def cmd_lookup(args):
+def _submit_queued(entry: dict) -> None:
+    """Submit a queued scrobble entry."""
+    listen_type = entry.get("listen_type", "single")
+    if listen_type == "single":
+        submit_listen(entry["track"], entry["listened_at"])
+    elif listen_type == "playing_now":
+        submit_playing_now(entry["track"])
+
+
+def cmd_lookup(args, verbose, cfg):
     """Identify CD and print metadata."""
-    from mbid import get_disc_info, get_cdtext, DiscReadError, find_cd_drive
+    from mbid import find_cd_drive
     from musicbrainz import _load_cache, _get_cached, _set_cached
 
-    device = args.device or find_cd_drive()
-    if args.verbose:
+    device = args.device or get_device(cfg) or find_cd_drive()
+    if verbose:
         print(f"Device: {device}", file=sys.stderr)
 
     disc_id = None
     # Try disc ID lookup
     try:
         disc_id, toc = get_disc_info(device)
-        if args.verbose:
+        if verbose:
             print(f"Disc ID: {disc_id}", file=sys.stderr)
 
         # Check cache for disc ID -> release MBID
@@ -80,7 +128,7 @@ def cmd_lookup(args):
         disc_key = f"disc:{disc_id}"
         cached_mbid = _get_cached(disc_key, cache)
         if cached_mbid:
-            if args.verbose:
+            if verbose:
                 print("Cache hit (disc ID)", file=sys.stderr)
             info = get_release_info(cached_mbid)
             print(f"{info['artist']} — {info['title']}")
@@ -91,17 +139,17 @@ def cmd_lookup(args):
             return
 
         release = find_release(disc_id, toc=toc)
-        if args.verbose:
+        if verbose:
             print(f"Match (disc ID): {release['artist']} — {release['title']}",
                   file=sys.stderr)
     except DiscReadError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        if args.verbose:
+        if verbose:
             print(f"Disc ID lookup failed: {e}", file=sys.stderr)
             print("Falling back to CD-Text search...", file=sys.stderr)
-        release = _lookup_by_cdtext(device, args.verbose)
+        release = _lookup_by_cdtext(device, verbose)
         if release is None:
             sys.exit(1)
 
@@ -123,19 +171,23 @@ def cmd_lookup(args):
         sys.exit(1)
 
 
-def cmd_play(args):
+def cmd_play(args, verbose, cfg):
     """Identify CD, start playback via mpv, scrobble tracks."""
     from mbid import DiscReadError, find_cd_drive
     from musicbrainz import _load_cache, _get_cached, _set_cached
+    from mpv_ipc import (
+        _get_default_socket, wait_for_mpv, is_mpv_ready,
+        mpv_get_status, mpv_get_position,
+    )
 
-    device = args.device or find_cd_drive()
-    if args.verbose:
+    device = args.device or get_device(cfg) or find_cd_drive()
+    if verbose:
         print(f"Device: {device}", file=sys.stderr)
 
     # Step 1: Read disc ID (fast)
     try:
         disc_id, toc = get_disc_info(device)
-        if args.verbose:
+        if verbose:
             print(f"Disc ID: {disc_id}", file=sys.stderr)
     except DiscReadError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -146,14 +198,14 @@ def cmd_play(args):
     disc_key = f"disc:{disc_id}"
     cached_mbid = _get_cached(disc_key, cache)
     if cached_mbid:
-        if args.verbose:
+        if verbose:
             print("Cache hit (disc ID)", file=sys.stderr)
         try:
             info = get_release_info(cached_mbid)
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        if args.verbose:
+        if verbose:
             print(f"{info['artist']} — {info['title']}", file=sys.stderr)
             print(f"Tracks: {len(info['tracks'])}", file=sys.stderr)
     else:
@@ -161,9 +213,9 @@ def cmd_play(args):
         try:
             release = find_release(disc_id, toc=toc)
         except Exception as e:
-            if args.verbose:
+            if verbose:
                 print(f"Disc ID lookup failed: {e}", file=sys.stderr)
-            release = _lookup_by_cdtext(device, args.verbose)
+            release = _lookup_by_cdtext(device, verbose)
             if release is None:
                 sys.exit(1)
 
@@ -177,42 +229,37 @@ def cmd_play(args):
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
 
-        if args.verbose:
+        if verbose:
             print(f"{info['artist']} — {info['title']}", file=sys.stderr)
             print(f"Tracks: {len(info['tracks'])}", file=sys.stderr)
 
+    # Determine socket path
+    sock_path = args.socket or get_mpv_socket(cfg) or _get_default_socket()
+    if verbose:
+        print(f"mpv socket: {sock_path}", file=sys.stderr)
+
+    no_playing = args.no_playing_now or no_playing_now(cfg)
+
     # Start playback if requested
     if args.start:
-        subprocess.Popen(["mpv", "--demuxer-max-bytes=20MiB",
-                          "--ao=pipewire", "--gapless-audio", f"cdda://{device}"],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if args.verbose:
+        subprocess.Popen(
+            ["mpv", "--demuxer-max-bytes=20MiB",
+             "--input-ipc-server=" + sock_path,
+             "--ao=pipewire", "--gapless-audio", f"cdda://{device}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if verbose:
             print("Playback started", file=sys.stderr)
-        # Wait for mpv to report Playing before monitoring
-        started = False
-        for i in range(30):
-            time.sleep(1)
-            try:
-                st = subprocess.run(
-                    ["playerctl", "-p", "mpv", "status"],
-                    capture_output=True, text=True, timeout=5,
-                ).stdout.strip()
-                if st == "Playing":
-                    started = True
-                    break
-            except Exception:
-                pass
-        if not started:
-            print("Warning: mpv did not report 'Playing' status within 30s — "
-                  "continuing anyway (may be a playerctl identity issue)",
-                  file=sys.stderr)
+        # Wait for mpv to be ready and playing
+        if not wait_for_mpv(sock_path, verbose=verbose):
+            print("Warning: mpv did not start within 30s", file=sys.stderr)
 
     # Monitor playback and scrobble
-    _monitor_and_scrobble(info, args)
+    _monitor_and_scrobble(info, sock_path, verbose, no_playing)
 
 
-def _monitor_and_scrobble(info: dict, args):
-    """Monitor mpv via playerctl and scrobble tracks using known track list."""
+def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool):
+    """Monitor mpv via IPC socket and scrobble tracks using known track list."""
     tracks_by_pos = {int(t["position"]): t for t in info["tracks"]}
     # Calculate track offsets (cumulative) in seconds
     track_offsets = []
@@ -238,12 +285,18 @@ def _monitor_and_scrobble(info: dict, args):
                 track.setdefault("release_mbid", info.get("release_mbid", ""))
                 try:
                     submit_listen(track, int(start_time))
-                    if args.verbose:
+                    if verbose:
                         print(f"Scrobbled: {track.get('title', position)}", file=sys.stderr)
                     scrobbled.add(position)
                 except Exception as e:
-                    if args.verbose:
-                        print(f"Scrobble failed: {e}", file=sys.stderr)
+                    # Queue for later retry
+                    enqueue({
+                        "listen_type": "single",
+                        "track": dict(track),
+                        "listened_at": int(start_time),
+                    })
+                    if verbose:
+                        print(f"Scrobble failed, queued: {e}", file=sys.stderr)
 
     total_duration = track_offsets[-1] if track_offsets else 0
 
@@ -257,41 +310,10 @@ def _monitor_and_scrobble(info: dict, args):
         return 1  # position 0 or before first track boundary
 
     try:
-        # Try the explicit mpv player filter first; fall back to no filter
-        # if playerctl can't find "mpv" (PipeWire MPRIS identity varies).
-        player_filter = ["-p", "mpv"]
-
         while True:
             try:
-                # Get playback status and position
-                status_result = subprocess.run(
-                    ["playerctl"] + player_filter + ["status"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                pos_result = subprocess.run(
-                    ["playerctl"] + player_filter + ["position"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                status = status_result.stdout.strip()
-
-                # If playerctl returns empty with the mpv filter, try without it
-                if not status and player_filter:
-                    player_filter = []
-                    if args.verbose:
-                        print("playerctl: mpv filter failed, trying without filter",
-                              file=sys.stderr)
-                    continue
-
-                # If playerctl returns empty/error, player exited — scrobble and exit
-                if not status and last_position is not None:
-                    _scrobble_track(last_position)
-                    break
-
-                pos_s = 0.0
-                try:
-                    pos_s = float(pos_result.stdout.strip())
-                except ValueError:
-                    pass
+                status = mpv_get_status(sock_path)
+                pos_s = mpv_get_position(sock_path)
 
                 # Detect playback stopped — scrobble current track then exit
                 if status == "Stopped" and last_position is not None:
@@ -304,23 +326,25 @@ def _monitor_and_scrobble(info: dict, args):
                 if status == "Paused" and last_position is not None:
                     _scrobble_track(last_position)
                     start_time = None
-                    if args.verbose:
+                    if verbose:
                         print("Paused — waiting for resume", file=sys.stderr)
+                    time.sleep(1)
                     continue
 
                 # mpv reports total duration before playback starts; ignore until position drops
                 if pos_s > 0 and pos_s >= total_duration * 0.99 and last_position is None:
+                    time.sleep(1)
                     continue
 
                 current_track = _current_track(pos_s) if pos_s > 0 else None
 
-                if args.verbose and current_track:
+                if verbose and current_track:
                     print(f"Track {current_track}", file=sys.stderr)
 
                 # Detect resume from pause
                 if status == "Playing" and last_position is not None and start_time is None:
                     start_time = time.time()
-                    if args.verbose:
+                    if verbose:
                         print("Resumed", file=sys.stderr)
 
                 # Detect track change
@@ -334,23 +358,24 @@ def _monitor_and_scrobble(info: dict, args):
                     last_position = current_track
 
                     # Submit playing_now
-                    if not args.no_playing_now:
+                    if not no_playing:
                         track = tracks_by_pos.get(current_track, {})
                         track.setdefault("album", info["title"])
                         track.setdefault("artist", info["artist"])
                         track.setdefault("release_mbid", info.get("release_mbid", ""))
                         try:
                             submit_playing_now(track)
-                            if args.verbose:
+                            if verbose:
                                 print(f"Now: {track.get('title', current_track)}", file=sys.stderr)
                         except Exception as e:
-                            if args.verbose:
+                            if verbose:
                                 print(f"playing_now failed: {e}", file=sys.stderr)
 
-            except (subprocess.TimeoutExpired, subprocess.SubprocessError):
+            except ConnectionError:
+                # mpv not connected yet — wait
                 pass
             except Exception as e:
-                if args.verbose:
+                if verbose:
                     print(f"Unexpected error in monitor loop: {e}", file=sys.stderr)
 
             time.sleep(1)
@@ -358,11 +383,11 @@ def _monitor_and_scrobble(info: dict, args):
     except KeyboardInterrupt:
         if last_position is not None:
             _scrobble_track(last_position)
-        if args.verbose:
+        if verbose:
             print("\nInterrupted", file=sys.stderr)
 
 
-def cmd_cache(args):
+def cmd_cache(args, verbose, cfg):
     """Read disc ID and cache it against a user-provided release MBID."""
     from mbid import DiscReadError, find_cd_drive
     from musicbrainz import _load_cache, _get_cached, _set_cached
@@ -375,8 +400,8 @@ def cmd_cache(args):
         print(f"Error: invalid release MBID: {args.release_mbid}", file=sys.stderr)
         sys.exit(1)
 
-    device = args.device or find_cd_drive()
-    if args.verbose:
+    device = args.device or get_device(cfg) or find_cd_drive()
+    if verbose:
         print(f"Device: {device}", file=sys.stderr)
 
     try:
@@ -402,6 +427,76 @@ def cmd_cache(args):
         print(f"Cached: {disc_id} -> {info['artist']} — {info['title']}")
     except Exception as e:
         print(f"Cached (verify failed: {e})", file=sys.stderr)
+
+
+def cmd_history(args):
+    """Show recent scrobbles from ListenBrainz."""
+    from listenbrainz import _get_token
+
+    try:
+        token = _get_token()
+    except LookupError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    import requests
+
+    # Get user ID first
+    try:
+        user_resp = requests.get(
+            "https://api.listenbrainz.org/1/me/username",
+            headers={"Authorization": f"Token {token}"},
+            timeout=10,
+        )
+        user_resp.raise_for_status()
+        username = user_resp.json()["user_name"]
+    except Exception as e:
+        print(f"Error fetching username: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Fetch recent listens
+    try:
+        resp = requests.get(
+            f"https://api.listenbrainz.org/1/user/{username}/listens",
+            params={"limit": args.count},
+            headers={"Authorization": f"Token {token}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"Error fetching history: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    listens = data.get("payload", [])
+    if not listens:
+        print("No recent scrobbles found.")
+        return
+
+    for listen in listens:
+        meta = listen.get("track_metadata", {})
+        artist = meta.get("artist_name", "Unknown")
+        title = meta.get("track_name", "Unknown")
+        album = meta.get("release_name", "")
+        ts = listen.get("listened_at", 0)
+        dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+        album_str = f" ({album})" if album else ""
+        print(f"{dt}  {artist} — {title}{album_str}")
+
+
+def cmd_queue(args, verbose):
+    """Show or flush the offline queue."""
+    size = queue_size()
+    print(f"Queue: {size} pending entry/entries")
+
+    if args.flush:
+        ok, remaining = flush_queue(lambda e: _submit_queued(e))
+        if ok:
+            print(f"Flushed: {ok} scrobble(s) submitted")
+        if remaining:
+            print(f"Remaining: {remaining} (will retry next run)")
+        else:
+            print("Queue is now empty")
 
 
 def _lookup_by_cdtext(device, verbose=False):
