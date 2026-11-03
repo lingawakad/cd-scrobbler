@@ -285,6 +285,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     start_time = None
     elapsed_before_pause = 0.0  # accumulated playtime before the most recent pause
     scrobbled = set()  # positions already scrobbled
+    mpv_connected = False  # have we ever successfully reached mpv?
 
     def _scrobble_track(position):
         """Scrobble a track if played long enough."""
@@ -329,6 +330,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
             try:
                 status = mpv_get_status(sock_path)
                 pos_s = mpv_get_position(sock_path)
+                mpv_connected = True
 
                 # Detect playback stopped — scrobble current track then exit
                 if status == "Stopped" and last_position is not None:
@@ -392,7 +394,13 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                                 print(f"playing_now failed: {e}", file=sys.stderr)
 
             except ConnectionError:
-                # mpv not connected yet — wait
+                # mpv not connected yet — wait; but if it was connected, it exited
+                if mpv_connected:
+                    if last_position is not None:
+                        _scrobble_track(last_position)
+                    if verbose:
+                        print("mpv disconnected", file=sys.stderr)
+                    break
                 pass
             except Exception as e:
                 if verbose:
