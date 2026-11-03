@@ -283,13 +283,14 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
         cumulative += t.get("length_ms", 0) / 1000  # ms -> seconds
     last_position = None
     start_time = None
+    elapsed_before_pause = 0.0  # accumulated playtime before the most recent pause
     scrobbled = set()  # positions already scrobbled
 
     def _scrobble_track(position):
         """Scrobble a track if played long enough."""
         nonlocal start_time
         if position not in scrobbled and start_time:
-            played = time.time() - start_time
+            played = (time.time() - start_time) + elapsed_before_pause
             track = tracks_by_pos.get(position, {})
             track_len = track.get("length_ms", 0) / 1000 if track.get("length_ms") else 0
             min_played = min(4 * 60, track_len / 2) if track_len > 0 else 4 * 60
@@ -339,7 +340,10 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 # Detect pause — scrobble current track, stay alive for resume
                 if status == "Paused" and last_position is not None:
                     _scrobble_track(last_position)
-                    start_time = None
+                    # Capture elapsed playtime so the timestamp is preserved across pause
+                    if start_time is not None:
+                        elapsed_before_pause = (time.time() - start_time) + elapsed_before_pause
+                        start_time = None  # allow resume detection to fire
                     if verbose:
                         print("Paused — waiting for resume", file=sys.stderr)
                     time.sleep(1)
@@ -357,7 +361,9 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
 
                 # Detect resume from pause
                 if status == "Playing" and last_position is not None and start_time is None:
-                    start_time = time.time()
+                    # Restore effective start time so (time.time() - start_time) reflects total playtime
+                    start_time = time.time() - elapsed_before_pause
+                    elapsed_before_pause = 0.0
                     if verbose:
                         print("Resumed", file=sys.stderr)
 
@@ -500,8 +506,19 @@ def cmd_history(args):
 
 def cmd_queue(args, verbose, cfg):
     """Show or flush the offline queue."""
-    size = queue_size()
-    print(f"Queue: {size} pending entry/entries")
+    from offline_queue import load_queue
+    queue = load_queue()
+    print(f"Queue: {len(queue)} pending entry/entries")
+
+    if verbose and queue:
+        for i, entry in enumerate(queue):
+            track = entry.get("track", {})
+            ts = entry.get("listened_at", 0)
+            dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "???"
+            retries = entry.get("retries", 0)
+            title = track.get("title", "???")
+            artist = track.get("artist", "")
+            print(f"  [{i+1}] {dt}  {artist} — {title}  (retries: {retries})")
 
     if args.flush:
         cfg_token = get_listenbrainz_token(cfg)
