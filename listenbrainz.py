@@ -99,3 +99,16 @@ def submit_playing_now(track: dict, config_token: str | None = None) -> str:
     resp.raise_for_status()
     result = resp.json()
     return result.get("recording_msid", "")
+
+
+def clear_playing_now(config_token: str | None = None) -> None:
+    """Clear the playing_now notification by submitting an empty payload."""
+    token = _get_token(config_token)
+
+    resp = requests.post(
+        API_URL,
+        json={"listen_type": "playing_now", "payload": []},
+        headers={"Authorization": f"Token {token}", "User-Agent": USER_AGENT},
+        timeout=10,
+    )
+    resp.raise_for_status()

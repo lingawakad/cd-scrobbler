@@ -21,7 +21,7 @@ from musicbrainz import (
     search_releases,
     get_release_info,
 )
-from listenbrainz import submit_listen, submit_playing_now
+from listenbrainz import submit_listen, submit_playing_now, clear_playing_now
 from offline_queue import enqueue, flush_queue, queue_size
 
 
@@ -335,6 +335,11 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 # Detect playback stopped — scrobble current track then exit
                 if status == "Stopped" and last_position is not None:
                     _scrobble_track(last_position)
+                    if not no_playing:
+                        try:
+                            clear_playing_now(config_token)
+                        except Exception:
+                            pass  # non-critical
                     last_position = None
                     start_time = None
                     break
@@ -411,6 +416,11 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     except KeyboardInterrupt:
         if last_position is not None:
             _scrobble_track(last_position)
+        if not no_playing:
+            try:
+                clear_playing_now(config_token)
+            except Exception:
+                pass
         if verbose:
             print("\nInterrupted", file=sys.stderr)
 
