@@ -1,9 +1,7 @@
 """cdscrobble — Scrobble CD playback to ListenBrainz."""
 
 import argparse
-import json
 import re
-import signal
 import subprocess
 import sys
 import time
@@ -23,6 +21,15 @@ from musicbrainz import (
 )
 from listenbrainz import submit_listen, submit_playing_now, clear_playing_now
 from offline_queue import enqueue, flush_queue, queue_size
+
+
+def _print_tracks(info: dict) -> None:
+    """Print release artist, title, and track listing."""
+    print(f"{info['artist']} — {info['title']}")
+    for t in info["tracks"]:
+        ms = t["length_ms"]
+        m, s = divmod(ms // 1000, 60)
+        print(f"  {t['position']}: {t['title']} ({m}:{s:02d})")
 
 
 def main():
@@ -147,11 +154,7 @@ def cmd_lookup(args, verbose, cfg):
             if verbose:
                 print("Cache hit (disc ID)", file=sys.stderr)
             info = get_release_info(cached_mbid)
-            print(f"{info['artist']} — {info['title']}")
-            for t in info["tracks"]:
-                ms = t["length_ms"]
-                m, s = divmod(ms // 1000, 60)
-                print(f"  {t['position']}: {t['title']} ({m}:{s:02d})")
+            _print_tracks(info)
             return
 
         release = find_release(disc_id, toc=toc)
@@ -177,11 +180,7 @@ def cmd_lookup(args, verbose, cfg):
     # Get track info
     try:
         info = get_release_info(release["mbid"])
-        print(f"{info['artist']} — {info['title']}")
-        for t in info["tracks"]:
-            ms = t["length_ms"]
-            m, s = divmod(ms // 1000, 60)
-            print(f"  {t['position']}: {t['title']} ({m}:{s:02d})")
+        _print_tracks(info)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -283,15 +282,14 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
         cumulative += t.get("length_ms", 0) / 1000  # ms -> seconds
     last_position = None
     start_time = None
-    elapsed_before_pause = 0.0  # accumulated playtime before the most recent pause
     scrobbled = set()  # positions already scrobbled
     mpv_connected = False  # have we ever successfully reached mpv?
+    was_paused = False  # track pause state to avoid spamming messages
 
     def _scrobble_track(position):
         """Scrobble a track if played long enough."""
-        nonlocal start_time
         if position not in scrobbled and start_time:
-            played = (time.time() - start_time) + elapsed_before_pause
+            played = time.time() - start_time
             track = tracks_by_pos.get(position, {})
             track_len = track.get("length_ms", 0) / 1000 if track.get("length_ms") else 0
             min_played = min(4 * 60, track_len / 2) if track_len > 0 else 4 * 60
@@ -347,12 +345,10 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 # Detect pause — scrobble current track, stay alive for resume
                 if status == "Paused" and last_position is not None:
                     _scrobble_track(last_position)
-                    # Capture elapsed playtime so the timestamp is preserved across pause
-                    if start_time is not None:
-                        elapsed_before_pause = (time.time() - start_time) + elapsed_before_pause
-                        start_time = None  # allow resume detection to fire
-                    if verbose:
-                        print("Paused — waiting for resume", file=sys.stderr)
+                    if not was_paused:
+                        was_paused = True
+                        if verbose:
+                            print("Paused — waiting for resume", file=sys.stderr)
                     time.sleep(1)
                     continue
 
@@ -367,10 +363,9 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     print(f"Track {current_track}", file=sys.stderr)
 
                 # Detect resume from pause
-                if status == "Playing" and last_position is not None and start_time is None:
-                    # Restore effective start time so (time.time() - start_time) reflects total playtime
-                    start_time = time.time() - elapsed_before_pause
-                    elapsed_before_pause = 0.0
+                if status == "Playing" and last_position is not None and was_paused:
+                    was_paused = False
+                    start_time = time.time()
                     if verbose:
                         print("Resumed", file=sys.stderr)
 
@@ -382,6 +377,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
 
                     # New track started — record when this track began
                     start_time = time.time()
+                    was_paused = False
                     last_position = current_track
 
                     # Submit playing_now
