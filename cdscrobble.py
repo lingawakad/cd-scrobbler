@@ -281,15 +281,17 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
         track_offsets.append(cumulative)
         cumulative += t.get("length_ms", 0) / 1000  # ms -> seconds
     last_position = None
-    start_time = None
-    scrobbled = set()  # positions already scrobbled
-    mpv_connected = False  # have we ever successfully reached mpv?
-    was_paused = False  # track pause state to avoid spamming messages
+    start_time = None          # wall-clock time when current track segment started
+    scrobbled = set()          # positions already scrobbled
+    mpv_connected = False      # have we ever successfully reached mpv?
+    was_paused = False         # track pause state to avoid spamming messages
+    track_start = None         # wall-clock time when current track first started
+    accumulated_play = 0.0     # total playtime for current track across pauses
 
     def _scrobble_track(position):
         """Scrobble a track if played long enough."""
-        if position not in scrobbled and start_time:
-            played = time.time() - start_time
+        if position not in scrobbled and start_time and track_start:
+            played = (time.time() - start_time) + accumulated_play
             track = tracks_by_pos.get(position, {})
             track_len = track.get("length_ms", 0) / 1000 if track.get("length_ms") else 0
             min_played = min(4 * 60, track_len / 2) if track_len > 0 else 4 * 60
@@ -298,7 +300,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 track.setdefault("artist", info["artist"])
                 track.setdefault("release_mbid", info.get("release_mbid", ""))
                 try:
-                    submit_listen(track, int(start_time), config_token)
+                    submit_listen(track, int(track_start), config_token)
                     if verbose:
                         print(f"Scrobbled: {track.get('title', position)}", file=sys.stderr)
                     scrobbled.add(position)
@@ -307,7 +309,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     enqueue({
                         "listen_type": "single",
                         "track": dict(track),
-                        "listened_at": int(start_time),
+                        "listened_at": int(track_start),
                     })
                     if verbose:
                         print(f"Scrobble failed, queued: {e}", file=sys.stderr)
@@ -345,6 +347,8 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 # Detect pause — scrobble current track, stay alive for resume
                 if status == "Paused" and last_position is not None:
                     _scrobble_track(last_position)
+                    if start_time is not None:
+                        accumulated_play += time.time() - start_time
                     if not was_paused:
                         was_paused = True
                         if verbose:
@@ -377,6 +381,8 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
 
                     # New track started — record when this track began
                     start_time = time.time()
+                    track_start = time.time()
+                    accumulated_play = 0.0
                     was_paused = False
                     last_position = current_track
 
