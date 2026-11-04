@@ -8,7 +8,8 @@ import socket
 import sys
 from pathlib import Path
 
-DISC_ID_RE = re.compile(r"^[A-Za-z0-9_\-=\.]+$")
+from mbid import DISC_ID_RE
+
 MBID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 CACHE_DIR = Path.home() / ".cache" / "cd-scrobbler"
@@ -166,8 +167,9 @@ def find_release_by_search(candidates: list[dict], track_titles: list[str]) -> d
     if not track_titles:
         raise LookupError(f"Ambiguous search ({len(candidates)} matches) — provide track titles")
 
-    best = max(candidates, key=lambda c: _title_score(c["mbid"], track_titles))
-    score = _title_score(best["mbid"], track_titles)
+    # Score all candidates once, cache results
+    scored = [(c, _title_score(c["mbid"], track_titles)) for c in candidates]
+    best, score = max(scored, key=lambda x: x[1])
 
     if score < 0.7:
         raise LookupError("Ambiguous search — no confident track title match")
