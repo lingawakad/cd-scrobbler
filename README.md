@@ -59,6 +59,7 @@ CLI arguments override config file values.
 - 20 MiB read-ahead buffer for scratched/problematic discs
 - Direct mpv IPC control (no playerctl/MPRIS dependency)
 - Offline queue: failed scrobbles retry on next run
+- `playing_now` cleared when playback ends or is interrupted
 - Ctrl+C gracefully scrobbles the current track
 - History command: view recent scrobbles from ListenBrainz
 - Cache capped at 500 entries (FIFO eviction)
@@ -95,10 +96,11 @@ cdscrobble history -n 25
 
 ### `queue`
 
-Shows the offline queue status. Use `--flush` to attempt submitting any queued scrobbles immediately.
+Shows the offline queue status. Use `-v` to see queued entries with timestamps and retry counts. Use `--flush` to attempt submitting any queued scrobbles immediately.
 
 ```bash
 cdscrobble queue
+cdscrobble queue -v
 cdscrobble queue --flush
 ```
 
