@@ -10,7 +10,7 @@ from pathlib import Path
 from config import (
     load_config, save_config, get_device, is_verbose, get_mpv_socket,
     no_playing_now, get_listenbrainz_token,
-    get_lastfm_api_key, get_lastfm_session_key, lastfm_enabled,
+    get_lastfm_api_key, get_lastfm_api_secret, get_lastfm_session_key, lastfm_enabled,
 )
 from mbid import get_disc_info, get_cdtext, DiscReadError
 from mpv_ipc import (
