@@ -35,8 +35,8 @@ def _ensure_network(config: dict):
     )
     try:
         _username = _network.get_username()
-    except pylast.LastFMError:
-        # Session may be expired — re-create on next call
+    except Exception:
+        # Session may be expired or invalid — reset cache so next call retries fresh
         _network = None
         _username = None
         raise

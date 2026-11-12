@@ -890,12 +890,11 @@ def _lastfm_set_key(session_key: str, cfg: dict):
         net = pylast.Network(
             api_key=api_key,
             session_key=session_key.strip(),
-            user_agent=USER_AGENT,
         )
         username = net.get_username()
         print(f"Session key accepted. User: {username}")
         print("Last.fm scrobbling is now active.")
-    except pylast.LastFMError as e:
+    except Exception as e:
         print(f"Error: invalid session key ({e})", file=sys.stderr)
         print("Run 'cdscrobble lastfm login' to get a new key.",
               file=sys.stderr)
