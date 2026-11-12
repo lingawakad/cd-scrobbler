@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cd-scrobbler"
-version = "0.4.0"
+version = "0.5.0"
 description = "Scrobble CD playback to ListenBrainz and Last.fm with mpv"
 readme = "README.md"
 license = "MIT"

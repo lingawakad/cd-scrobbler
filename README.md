@@ -48,7 +48,7 @@ cdscrobble queue --flush       # attempt to flush the offline queue
 cdscrobble control pause        # pause mpv playback
 cdscrobble control play         # resume mpv playback
 cdscrobble control stop         # stop mpv playback
-cdscrobble lastfm login         # authorize Last.fm (opens browser)
+cdscrobble lastfm login         # mobile auth (no browser needed)
 cdscrobble lastfm set-key <key> # manually set session key
 ```
 
@@ -84,6 +84,8 @@ CLI arguments override config file values.
 - History command: view recent scrobbles from any configured backend
 - `lastfm login` command to complete OAuth session key flow
 - Cache capped at 500 entries (FIFO eviction)
+- Daemonized `play --start`: releases the prompt, logs to `~/.config/cd-scrobbler/monitor.log`
+- pylast 7.x compatible (mobile auth, flat API)
 
 ## Commands
 
@@ -95,7 +97,11 @@ Reads the disc ID from the CD drive (`/dev/sr0` by default), looks it up on Musi
 
 Identifies the CD, then uses `mpv` for playback with direct IPC control. Scrobbles each track to ListenBrainz when playback ends. Exits when playback stops. Pausing scrobbles the current track — resume and it picks up the next one.
 
-With `--start`, launches mpv with `--input-ipc-server` for direct communication (no MPRIS/playerctl needed).
+With `--start`, launches mpv in the background and daemonizes the monitor process so your terminal prompt is released immediately. Monitor output goes to `~/.config/cd-scrobbler/monitor.log` — tail it with:
+
+```bash
+tail -f ~/.config/cd-scrobbler/monitor.log
+```
 
 ### `cache`
 
@@ -144,11 +150,11 @@ Use `--socket` to specify the socket path if it differs from the default.
 Manage Last.fm credentials:
 
 ```bash
-cdscrobble lastfm login    # opens browser for authorization
+cdscrobble lastfm login    # mobile auth — username + password, no browser
 cdscrobble lastfm set-key <key>  # manually enter a session key
 ```
 
-The login flow opens your browser to the Last.fm authorization page. After authorizing, paste the session key back. Alternatively, if you have a session key already (e.g. from another app), use `set-key`.
+The login flow uses Last.fm mobile auth: enter your username and password, and the session key is obtained programmatically. No browser or manual copy-paste needed.
 
 Both backends scrobble independently: scrobbling to ListenBrainz doesn't require Last.fm, and vice versa. Both are scrobbled simultaneously when both are configured.
 
