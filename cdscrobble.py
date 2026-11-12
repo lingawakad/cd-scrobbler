@@ -744,31 +744,20 @@ def cmd_lastfm(args, cfg, verbose=False):
     """Manage Last.fm credentials."""
     if not hasattr(args, 'lastfm_command') or not args.lastfm_command:
         print("Usage: cdscrobble lastfm <command>")
-        print("  login    — Open browser to authorize and get a session key")
-        print("  set-key  — Manually set a session key (from the login flow)")
+        print("  login    — Authenticate via mobile auth (username + password)")
+        print("  set-key  — Manually set a session key")
         sys.exit(1)
 
     cmd = args.lastfm_command
 
     if cmd == "login":
-        _lastfm_login(cfg, verbose)
+        _lastfm_mobile_login(cfg, verbose)
     elif cmd == "set-key":
         _lastfm_set_key(args.session_key, cfg)
 
 
-def _lastfm_login(cfg, verbose=False):
-    """Obtain a Last.fm session key via browser auth flow."""
-    import webbrowser
-    import urllib.parse
-
-    api_key = get_lastfm_api_key(cfg)
-    if not api_key:
-        print("Error: lastfm_api_key not set in config.", file=sys.stderr)
-        print("Add it to ~/.config/cd-scrobbler/config:\n", file=sys.stderr)
-        print("  [general]\n", file=sys.stderr)
-        print("  lastfm_api_key = YOUR_API_KEY\n", file=sys.stderr)
-        sys.exit(1)
-
+def _lastfm_mobile_login(cfg, verbose=False):
+    """Authenticate via pylast mobile auth flow. No browser needed."""
     try:
         import pylast
     except ImportError:
@@ -776,50 +765,50 @@ def _lastfm_login(cfg, verbose=False):
               file=sys.stderr)
         sys.exit(1)
 
-    # pylast's Webservice.get_url() hardcodes cb=file:// which is useless for CLI.
-    # Build the URL manually — Last.fm shows the session key on a confirmation page.
-    auth_url = f"https://www.last.fm/api/auth/?api_key={api_key}"
-
-    def _redact_url(url: str) -> str:
-        """Return a copy of *url* with sensitive query params masked."""
-        parsed = urllib.parse.urlparse(url)
-        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-        sensitive = {
-            "api_key", "api_sig", "token",
-            "session_key", "sk", "password",
-        }
-        redacted_query = [
-            (k, "***" if k.lower() in sensitive else v)
-            for k, v in query
-        ]
-        redacted = parsed._replace(
-            query=urllib.parse.urlencode(redacted_query, doseq=True)
-        )
-        return urllib.parse.urlunparse(redacted)
-
-    redacted = _redact_url(auth_url)
-
-    print("Open this URL in your browser to authorize cd-scrobbler:")
-    print()
-    print(f"  {redacted}")
-    print()
-    print("After authorizing, paste the session key below:")
-    print("  (or use: cdscrobble lastfm set-key <key>)")
-    print()
-
-    try:
-        webbrowser.open(auth_url)
-    except Exception:
-        print("(Could not open browser — visit the URL manually.)",
-              file=sys.stderr)
-
-    key = input("Session key: ").strip()
-    if not key:
-        print("No key provided. Use 'cdscrobble lastfm set-key <key>' instead.",
-              file=sys.stderr)
+    api_key = get_lastfm_api_key(cfg)
+    api_secret = get_lastfm_api_secret(cfg)
+    if not api_key:
+        print("Error: lastfm_api_key not set in config.", file=sys.stderr)
+        print("Add it to ~/.config/cd-scrobbler/config:\n", file=sys.stderr)
+        print("  [general]\n", file=sys.stderr)
+        print("  lastfm_api_key = YOUR_API_KEY\n", file=sys.stderr)
         sys.exit(1)
 
-    _lastfm_set_key(key, cfg)
+    if not api_secret:
+        print("Error: lastfm_api_secret not set in config.", file=sys.stderr)
+        print("Add it to ~/.config/cd-scrobbler/config:\n", file=sys.stderr)
+        print("  lastfm_api_secret = YOUR_SECRET\n", file=sys.stderr)
+        sys.exit(1)
+
+    username = input("Last.fm username: ").strip()
+    if not username:
+        print("No username provided.", file=sys.stderr)
+        sys.exit(1)
+
+    password = input("Password: ").strip()
+    if not password:
+        print("No password provided.", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        network = pylast.LastFMNetwork(
+            api_key=api_key,
+            api_secret=api_secret,
+            username=username,
+            password_hash=pylast.md5(password),
+            user_agent=USER_AGENT,
+        )
+        session_key = network.session_key
+        print(f"Authenticated as {username}")
+        print("Session key accepted. Last.fm scrobbling is active.")
+        save_config({"lastfm_session_key": session_key})
+    except pylast.MalformedResponseError as e:
+        print(f"Error: server response error ({e})", file=sys.stderr)
+        sys.exit(1)
+    except pylast.LastFMError as e:
+        print(f"Error: authentication failed ({e})", file=sys.stderr)
+        print("Check your username and password.", file=sys.stderr)
+        sys.exit(1)
 
 
 def _lastfm_set_key(session_key: str, cfg: dict):

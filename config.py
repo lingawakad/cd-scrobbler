@@ -13,6 +13,7 @@ DEFAULTS = {
     "no_playing_now": "false",
     "listenbrainz_token": "",
     "lastfm_api_key": "",
+    "lastfm_api_secret": "",
     "lastfm_session_key": "",
 }
 
@@ -80,6 +81,11 @@ def get_listenbrainz_token(config: dict) -> str | None:
 def get_lastfm_api_key(config: dict) -> str | None:
     """Return the configured Last.fm API key, or None."""
     return config.get("lastfm_api_key", "").strip() or None
+
+
+def get_lastfm_api_secret(config: dict) -> str | None:
+    """Return the configured Last.fm API secret, or None."""
+    return config.get("lastfm_api_secret", "").strip() or None
 
 
 def get_lastfm_session_key(config: dict) -> str | None:
