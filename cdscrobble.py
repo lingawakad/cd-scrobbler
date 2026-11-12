@@ -1,6 +1,7 @@
 """cdscrobble — Scrobble CD playback to ListenBrainz."""
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -302,9 +303,10 @@ def cmd_play(args, verbose, cfg, cfg_token=None):
         # Wait for mpv to be ready and playing
         if not wait_for_mpv(sock_path, verbose=verbose):
             print("Warning: mpv did not start within 30s", file=sys.stderr)
-
-    # Monitor playback and scrobble to both backends
-    _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg)
+        # Daemonize: fork so the monitor runs in the background,
+        # releasing the prompt immediately.
+        _daemonize_monitor(info, sock_path, verbose, no_playing, cfg)
+        return
 
 
 def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool, cfg: dict):
@@ -390,6 +392,29 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
 
                 # Detect playback stopped — scrobble current track then exit
                 if status == "Stopped" and last_position is not None:
+                    _scrobble_track(last_position)
+                    if not no_playing:
+                        if lb_enabled:
+                            try:
+                                lb_clear_playing_now(cfg.get("listenbrainz_token"))
+                            except Exception:
+                                pass
+                        if lf_enabled:
+                            try:
+                                lf_clear_playing_now(cfg)
+                            except Exception:
+                                pass
+                    last_position = None
+                    start_time = None
+                    break
+
+                # Fallback: mpv may not report "Stopped" for CD/audio-only
+                # (eof-reached may not be set). Detect by position.
+                if (
+                    last_position is not None
+                    and total_duration > 0
+                    and pos_s >= total_duration
+                ):
                     _scrobble_track(last_position)
                     if not no_playing:
                         if lb_enabled:
@@ -505,6 +530,35 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     pass
         if verbose:
             print("\nInterrupted", file=sys.stderr)
+
+
+def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
+    """Fork a child process to run the monitor, releasing the parent immediately."""
+    try:
+        pid = os.fork()
+    except OSError as e:
+        print(f"Error: fork failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if pid > 0:
+        # Parent: return control to the shell immediately
+        if verbose:
+            print("Monitor daemon started (PID {})".format(pid), file=sys.stderr)
+        return
+
+    # Child: detach from terminal and run monitor
+    os.setsid()
+    # Redirect stdio to devnull so child doesn't hold onto tty
+    sys.stdin.close()
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 0)
+    os.dup2(devnull, 1)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+
+    # Re-run monitor in the background child
+    _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg)
+    os._exit(0)
 
 
 def cmd_cache(args, verbose, cfg):

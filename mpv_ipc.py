@@ -63,12 +63,23 @@ def mpv_command(sock_path: str, *args, timeout: float = 5) -> None:
 
 
 def mpv_get_status(sock_path: str) -> str:
-    """Return 'Playing', 'Paused', or 'Stopped'."""
-    paused = mpv_get_property(sock_path, "pause")
+    """Return 'Playing', 'Paused', or 'Stopped'.
+
+    If 'eof-reached' is unavailable (older mpv or audio-only),
+    this returns 'Playing' and the caller should use a position-based
+    fallback to detect playback completion.
+    """
+    try:
+        paused = mpv_get_property(sock_path, "pause")
+    except (ConnectionError, RuntimeError):
+        raise
     if paused:
         return "Paused"
-    # Check if playback ended
-    eof_reached = mpv_get_property(sock_path, "eof-reached")
+    # Check if playback ended (may not work for audio-only in some mpv versions)
+    try:
+        eof_reached = mpv_get_property(sock_path, "eof-reached")
+    except (ConnectionError, RuntimeError):
+        return "Playing"
     if eof_reached:
         return "Stopped"
     return "Playing"

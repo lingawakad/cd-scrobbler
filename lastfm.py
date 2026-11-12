@@ -2,33 +2,47 @@
 
 import pylast
 
-from config import get_lastfm_api_key, get_lastfm_session_key
+from config import get_lastfm_api_key, get_lastfm_api_secret, get_lastfm_session_key
 
 USER_AGENT = "cd-scrobbler/0.3.0 (recent8571@proton.me)"
 
+# Cached network instance — created once and reused.
+_network = None
+_username = None
 
-def _get_network(config: dict):
-    """Return a pylast Network instance, or raise if credentials are missing."""
+
+def _ensure_network(config: dict):
+    """Lazily create and cache a pylast Network instance."""
+    global _network, _username
+    if _network is not None:
+        return _network, _username
+
     api_key = get_lastfm_api_key(config)
     session_key = get_lastfm_session_key(config)
+    api_secret = get_lastfm_api_secret(config)
+
     if not api_key or not session_key:
         raise LookupError(
             "Last.fm credentials not configured — "
             "add lastfm_api_key to ~/.config/cd-scrobbler/config "
             "and run: cdscrobble lastfm login"
         )
-    return pylast.Network(
+
+    _network = pylast.LastFMNetwork(
         api_key=api_key,
+        api_secret=api_secret,
         session_key=session_key,
         user_agent=USER_AGENT,
     )
+    try:
+        _username = _network.get_username()
+    except pylast.LastFMError:
+        # Session may be expired — re-create on next call
+        _network = None
+        _username = None
+        raise
 
-
-def _get_scrobbler(config: dict):
-    """Return a Last.fm Scrobbler for the configured user."""
-    net = _get_network(config)
-    username = net.get_username()
-    return net.get_user(username).get_scrobbler()
+    return _network, _username
 
 
 def submit_listen(
@@ -36,13 +50,9 @@ def submit_listen(
     listened_at: int,
     config: dict,
 ) -> None:
-    """Submit a single listen to Last.fm.
-
-    track: dict with keys — artist, title, album (optional).
-    listened_at: Unix timestamp of when playback started.
-    config: config dict with lastfm_api_key and lastfm_session_key.
-    """
-    scrobbler = _get_scrobbler(config)
+    """Submit a single listen to Last.fm."""
+    net, username = _ensure_network(config)
+    scrobbler = net.get_user(username).get_scrobbler()
     scrobbler.scrobble(
         artist=track["artist"],
         title=track["title"],
@@ -54,15 +64,15 @@ def submit_listen(
 def submit_playing_now(
     track: dict,
     config: dict,
-) -> str:
-    """Update Now Playing on Last.fm. Returns recording_mbid if available."""
-    scrobbler = _get_scrobbler(config)
+) -> None:
+    """Update Now Playing on Last.fm."""
+    net, username = _ensure_network(config)
+    scrobbler = net.get_user(username).get_scrobbler()
     scrobbler.update_now_playing(
         artist=track["artist"],
         title=track["title"],
         album=track.get("album", "") or None,
     )
-    return track.get("recording_mbid", "")
 
 
 def clear_playing_now(config: dict) -> None:
@@ -74,14 +84,10 @@ def get_recent_tracks(
     limit: int = 25,
     config: dict | None = None,
 ) -> list[dict]:
-    """Fetch recent scrobbles from Last.fm.
-
-    Returns list of dicts: artist, title, album, timestamp.
-    """
+    """Fetch recent scrobbles from Last.fm."""
     if config is None:
         config = {}
-    net = _get_network(config)
-    username = net.get_username()
+    net, username = _ensure_network(config)
     user = net.get_user(username)
     track_info = user.get_recent_tracks(limit=limit)
 
