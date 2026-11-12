@@ -796,16 +796,15 @@ def _lastfm_mobile_login(cfg, verbose=False):
             api_secret=api_secret,
             username=username,
             password_hash=pylast.md5(password),
-            user_agent=USER_AGENT,
         )
         session_key = network.session_key
         print(f"Authenticated as {username}")
         print("Session key accepted. Last.fm scrobbling is active.")
         save_config({"lastfm_session_key": session_key})
-    except pylast.MalformedResponseError as e:
+    except pylast.WSError as e:
         print(f"Error: server response error ({e})", file=sys.stderr)
         sys.exit(1)
-    except pylast.LastFMError as e:
+    except pylast.PyLastError as e:
         print(f"Error: authentication failed ({e})", file=sys.stderr)
         print("Check your username and password.", file=sys.stderr)
         sys.exit(1)
