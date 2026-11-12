@@ -771,18 +771,14 @@ def _lastfm_login(cfg, verbose=False):
 
     try:
         import pylast
-        ws = pylast.Webservice(api_key, "", "")
-        auth_url = ws.get_url()
     except ImportError:
         print("Error: pylast not installed. Run: pip install pylast",
               file=sys.stderr)
         sys.exit(1)
-    except Exception:
-        # Fallback: construct URL manually
-        auth_url = (
-            f"https://www.last.fm/api/auth/?api_key={api_key}"
-            f"&cb=file://{api_key}"
-        )
+
+    # pylast's Webservice.get_url() hardcodes cb=file:// which is useless for CLI.
+    # Build the URL manually — Last.fm shows the session key on a confirmation page.
+    auth_url = f"https://www.last.fm/api/auth/?api_key={api_key}"
 
     def _redact_url(url: str) -> str:
         """Return a copy of *url* with sensitive query params masked."""
