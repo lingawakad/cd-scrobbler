@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cd-scrobbler"
-version = "0.2.0"
-description = "Scrobble CD playback to ListenBrainz with mpv"
+version = "0.4.0"
+description = "Scrobble CD playback to ListenBrainz and Last.fm with mpv"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -16,6 +16,7 @@ dependencies = [
     "musicbrainzngs",
     "discid",
     "requests",
+    "pylast",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -34,4 +35,4 @@ Homepage = "https://codeberg.org/lingawakad/cd-scrobbler"
 cdscrobble = "cdscrobble:main"
 
 [tool.setuptools]
-py-modules = ["cdscrobble", "mbid", "musicbrainz", "listenbrainz", "config", "mpv_ipc", "offline_queue"]
+py-modules = ["cdscrobble", "mbid", "musicbrainz", "listenbrainz", "lastfm", "config", "mpv_ipc", "offline_queue"]

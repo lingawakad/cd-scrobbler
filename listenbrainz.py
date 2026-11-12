@@ -14,7 +14,7 @@ socket.getaddrinfo = _ipv4_only_getaddrinfo
 
 API_URL = "https://api.listenbrainz.org/1/submit-listens"
 TOKEN_FILE = Path.home() / ".lbtoken"
-USER_AGENT = "cd-scrobbler/0.2.0 (recent8571@proton.me)"
+USER_AGENT = "cd-scrobbler/0.3.0 (recent8571@proton.me)"
 
 
 def _get_token(config_token: str | None = None) -> str:

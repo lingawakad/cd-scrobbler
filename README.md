@@ -1,6 +1,6 @@
 # cd-scrobbler
 
-Scrobble CD playback to ListenBrainz with mpv.
+Scrobble CD playback to ListenBrainz and Last.fm with mpv.
 
 ## Install
 
@@ -15,11 +15,24 @@ pip install ./cd-scrobbler
 
 ## Setup
 
+### ListenBrainz
+
 Get a ListenBrainz token from https://listenbrainz.org/settings/ and save it:
 
 ```bash
 echo "your-token-here" > ~/.lbtoken
 ```
+
+### Last.fm (optional)
+
+Get an API key from https://www.last.fm/api/application and add it to config:
+
+```ini
+[general]
+lastfm_api_key = YOUR_API_KEY
+```
+
+Then run `cdscrobble lastfm login` to complete the authorization flow.
 
 ## Usage
 
@@ -27,12 +40,16 @@ echo "your-token-here" > ~/.lbtoken
 cdscrobble lookup              # identify CD and print metadata
 cdscrobble play --start        # identify CD, start mpv playback, scrobble
 cdscrobble cache <release-mbid>  # cache a release MBID for the current disc
-cdscrobble history             # show recent scrobbles from ListenBrainz
+cdscrobble history             # show recent scrobbles (both backends)
+cdscrobble history -s lastfm   # show only Last.fm scrobbles
+cdscrobble history -s listenbrainz  # show only ListenBrainz scrobbles
 cdscrobble queue               # show offline queue status
 cdscrobble queue --flush       # attempt to flush the offline queue
 cdscrobble control pause        # pause mpv playback
 cdscrobble control play         # resume mpv playback
 cdscrobble control stop         # stop mpv playback
+cdscrobble lastfm login         # authorize Last.fm (opens browser)
+cdscrobble lastfm set-key <key> # manually set session key
 ```
 
 All commands support `-d` (device, default auto-detected), `-v` (verbose), and `--no-playing-now` (play only).
@@ -48,6 +65,8 @@ verbose = true
 mpv_socket = /tmp/mpvsocket
 no_playing_now = false
 listenbrainz_token = your-token-here
+lastfm_api_key = your-api-key
+lastfm_session_key = your-session-key
 ```
 
 CLI arguments override config file values.
@@ -55,12 +74,15 @@ CLI arguments override config file values.
 ## Features
 
 - Disc ID lookup with MusicBrainz, CD-Text fallback
+- **Dual-backend scrobbling** to both ListenBrainz and Last.fm (each independently toggleable)
 - Automatic cache for disc ID → release MBID mapping
 - 20 MiB read-ahead buffer for scratched/problematic discs
 - Direct mpv IPC control (no playerctl/MPRIS dependency)
-- Offline queue: failed scrobbles retry on next run
+- Offline queue: failed scrobbles to any backend retry on next run
+- `playing_now` cleared when playback ends or is interrupted
 - Ctrl+C gracefully scrobbles the current track
-- History command: view recent scrobbles from ListenBrainz
+- History command: view recent scrobbles from any configured backend
+- `lastfm login` command to complete OAuth session key flow
 - Cache capped at 500 entries (FIFO eviction)
 
 ## Commands
@@ -86,19 +108,22 @@ cdscrobble cache https://musicbrainz.org/release/b4296301-7ab9-4fa1-a1d7-18647b7
 
 ### `history`
 
-Shows your recent scrobbles from ListenBrainz. Defaults to 10 entries; use `-n` to change.
+Shows your recent scrobbles. Defaults to showing both backends; use `-s` to filter:
 
 ```bash
 cdscrobble history
 cdscrobble history -n 25
+cdscrobble history -s lastfm
+cdscrobble history -s listenbrainz
 ```
 
 ### `queue`
 
-Shows the offline queue status. Use `--flush` to attempt submitting any queued scrobbles immediately.
+Shows the offline queue status. Use `-v` to see queued entries with timestamps and retry counts. Use `--flush` to attempt submitting any queued scrobbles immediately.
 
 ```bash
 cdscrobble queue
+cdscrobble queue -v
 cdscrobble queue --flush
 ```
 
@@ -114,10 +139,24 @@ cdscrobble control stop
 
 Use `--socket` to specify the socket path if it differs from the default.
 
+### `lastfm`
+
+Manage Last.fm credentials:
+
+```bash
+cdscrobble lastfm login    # opens browser for authorization
+cdscrobble lastfm set-key <key>  # manually enter a session key
+```
+
+The login flow opens your browser to the Last.fm authorization page. After authorizing, paste the session key back. Alternatively, if you have a session key already (e.g. from another app), use `set-key`.
+
+Both backends scrobble independently: scrobbling to ListenBrainz doesn't require Last.fm, and vice versa. Both are scrobbled simultaneously when both are configured.
+
 ## Dependencies
 
 - `musicbrainzngs` — MusicBrainz API
 - `discid` — CD disc ID reading
 - `requests` — ListenBrainz API
+- `pylast` — Last.fm API
 - `mpv` — CD playback with read-ahead buffer (system package)
 - `cd-info` — CD-Text fallback (system package, optional)

@@ -7,7 +7,11 @@ import sys
 import time
 from pathlib import Path
 
-from config import load_config, get_device, is_verbose, get_mpv_socket, no_playing_now, get_listenbrainz_token
+from config import (
+    load_config, save_config, get_device, is_verbose, get_mpv_socket,
+    no_playing_now, get_listenbrainz_token,
+    get_lastfm_api_key, get_lastfm_session_key, lastfm_enabled,
+)
 from mbid import get_disc_info, get_cdtext, DiscReadError
 from mpv_ipc import (
     _get_default_socket, wait_for_mpv,
@@ -19,8 +23,11 @@ from musicbrainz import (
     search_releases,
     get_release_info,
 )
-from listenbrainz import submit_listen, submit_playing_now, clear_playing_now
+from listenbrainz import submit_listen as lb_submit_listen, submit_playing_now as lb_submit_playing_now, clear_playing_now as lb_clear_playing_now
+from lastfm import submit_listen as lf_submit_listen, submit_playing_now as lf_submit_playing_now, clear_playing_now as lf_clear_playing_now
 from offline_queue import enqueue, flush_queue, queue_size
+
+USER_AGENT = "cd-scrobbler/0.3.0 (recent8571@proton.me)"
 
 
 def _print_tracks(info: dict) -> None:
@@ -65,10 +72,12 @@ def main():
     p_cache.add_argument("-v", "--verbose", action="store_true")
     p_cache.add_argument("release_mbid", help="MusicBrainz release ID")
 
-    # history: show recent scrobbles from ListenBrainz
+    # history: show recent scrobbles from configured backends
     p_history = sub.add_parser("history", help="Show recent scrobbles")
     p_history.add_argument("-n", "--count", type=int, default=10,
                            help="Number of recent scrobbles to show (default: 10)")
+    p_history.add_argument("-s", "--service", choices=["listenbrainz", "lastfm", "both"],
+                           default="both", help="Which backend to query (default: both)")
     p_history.add_argument("-v", "--verbose", action="store_true")
 
     # queue: show or flush the offline queue
@@ -85,6 +94,18 @@ def main():
                            help="mpv IPC socket path (default: auto)")
     p_control.add_argument("-v", "--verbose", action="store_true")
 
+    # lastfm: manage Last.fm session key
+    p_lastfm = sub.add_parser("lastfm", help="Manage Last.fm credentials")
+    p_lastfm_sub = p_lastfm.add_subparsers(dest="lastfm_command")
+
+    p_lastfm_login = p_lastfm_sub.add_parser("login",
+                                              help="Obtain a Last.fm session key")
+    p_lastfm_login.add_argument("-v", "--verbose", action="store_true")
+
+    p_lastfm_set = p_lastfm_sub.add_parser("set-key",
+                                           help="Manually set the Last.fm session key")
+    p_lastfm_set.add_argument("session_key", help="Last.fm session key")
+
     args = parser.parse_args()
 
     # Merge CLI args with config: CLI takes precedence
@@ -95,7 +116,7 @@ def main():
     # Flush any pending queue entries at startup
     if hasattr(args, 'command') and args.command != "queue":
         try:
-            ok, remaining = flush_queue(lambda e: _submit_queued(e, cfg_token))
+            ok, remaining = flush_queue(lambda e: _submit_queued(e, cfg))
             if ok and verbose:
                 print(f"Flushed {ok} queued scrobble(s)", file=sys.stderr)
             if remaining and verbose:
@@ -107,27 +128,42 @@ def main():
     if args.command == "lookup":
         cmd_lookup(args, verbose, cfg)
     elif args.command == "play":
-        cmd_play(args, verbose, cfg, cfg_token)
+        cmd_play(args, verbose, cfg)
     elif args.command == "cache":
         cmd_cache(args, verbose, cfg)
     elif args.command == "history":
-        cmd_history(args)
+        cmd_history(args, cfg)
     elif args.command == "queue":
         cmd_queue(args, verbose, cfg)
     elif args.command == "control":
         cmd_control(args, cfg)
+    elif args.command == "lastfm":
+        cmd_lastfm(args, cfg, verbose)
     else:
         parser.print_help()
         sys.exit(1)
 
 
-def _submit_queued(entry: dict, config_token=None) -> None:
-    """Submit a queued scrobble entry."""
-    listen_type = entry.get("listen_type", "single")
-    if listen_type == "single":
-        submit_listen(entry["track"], entry["listened_at"], config_token)
-    elif listen_type == "playing_now":
-        submit_playing_now(entry["track"], config_token)
+def _submit_queued(entry: dict, config: dict) -> None:
+    """Submit a queued scrobble entry to the appropriate backend."""
+    backend = entry.get("backend", "listenbrainz")
+    track = entry["track"]
+    listened_at = entry.get("listened_at")
+
+    if entry.get("listen_type") == "playing_now":
+        if backend == "lastfm":
+            lf_submit_playing_now(track, config.get("lastfm_session_key"))
+        else:
+            lb_submit_playing_now(track, config.get("listenbrainz_token"))
+        return
+
+    if listened_at is None:
+        raise ValueError("Queue entry missing 'listened_at'")
+
+    if backend == "lastfm":
+        lf_submit_listen(track, listened_at, config.get("lastfm_session_key"))
+    else:
+        lb_submit_listen(track, listened_at, config.get("listenbrainz_token"))
 
 
 def cmd_lookup(args, verbose, cfg):
@@ -267,12 +303,12 @@ def cmd_play(args, verbose, cfg, cfg_token=None):
         if not wait_for_mpv(sock_path, verbose=verbose):
             print("Warning: mpv did not start within 30s", file=sys.stderr)
 
-    # Monitor playback and scrobble
-    _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg_token)
+    # Monitor playback and scrobble to both backends
+    _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg)
 
 
-def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool, config_token=None):
-    """Monitor mpv via IPC socket and scrobble tracks using known track list."""
+def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool, cfg: dict):
+    """Monitor mpv via IPC socket and scrobble tracks to configured backends."""
     tracks_by_pos = {int(t["position"]): t for t in info["tracks"]}
     # Calculate track offsets (cumulative) in seconds
     track_offsets = []
@@ -287,9 +323,11 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     was_paused = False         # track pause state to avoid spamming messages
     track_start = None         # wall-clock time when current track first started
     accumulated_play = 0.0     # total playtime for current track across pauses
+    lb_enabled = bool(get_listenbrainz_token(cfg))
+    lf_enabled = lastfm_enabled(cfg)
 
     def _scrobble_track(position):
-        """Scrobble a track if played long enough."""
+        """Scrobble a track if played long enough (to both enabled backends)."""
         if position not in scrobbled and start_time and track_start:
             played = (time.time() - start_time) + accumulated_play
             track = tracks_by_pos.get(position, {})
@@ -299,20 +337,38 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 track.setdefault("album", info["title"])
                 track.setdefault("artist", info["artist"])
                 track.setdefault("release_mbid", info.get("release_mbid", ""))
-                try:
-                    submit_listen(track, int(track_start), config_token)
-                    if verbose:
-                        print(f"Scrobbled: {track.get('title', position)}", file=sys.stderr)
-                    scrobbled.add(position)
-                except Exception as e:
-                    # Queue for later retry
-                    enqueue({
-                        "listen_type": "single",
-                        "track": dict(track),
-                        "listened_at": int(track_start),
-                    })
-                    if verbose:
-                        print(f"Scrobble failed, queued: {e}", file=sys.stderr)
+                ts = int(track_start)
+                if lb_enabled:
+                    try:
+                        lb_submit_listen(track, ts, cfg.get("listenbrainz_token"))
+                        if verbose:
+                            print(f"Scrobbled (LB): {track.get('title', position)}",
+                                  file=sys.stderr)
+                    except Exception as e:
+                        enqueue({
+                            "backend": "listenbrainz",
+                            "listen_type": "single",
+                            "track": dict(track),
+                            "listened_at": ts,
+                        })
+                        if verbose:
+                            print(f"LB scrobble failed, queued: {e}", file=sys.stderr)
+                if lf_enabled:
+                    try:
+                        lf_submit_listen(track, ts, cfg.get("lastfm_session_key"))
+                        if verbose:
+                            print(f"Scrobbled (LF): {track.get('title', position)}",
+                                  file=sys.stderr)
+                    except Exception as e:
+                        enqueue({
+                            "backend": "lastfm",
+                            "listen_type": "single",
+                            "track": dict(track),
+                            "listened_at": ts,
+                        })
+                        if verbose:
+                            print(f"LF scrobble failed, queued: {e}", file=sys.stderr)
+                scrobbled.add(position)
 
     total_duration = track_offsets[-1] if track_offsets else 0
 
@@ -336,10 +392,16 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 if status == "Stopped" and last_position is not None:
                     _scrobble_track(last_position)
                     if not no_playing:
-                        try:
-                            clear_playing_now(config_token)
-                        except Exception:
-                            pass  # non-critical
+                        if lb_enabled:
+                            try:
+                                lb_clear_playing_now(cfg.get("listenbrainz_token"))
+                            except Exception:
+                                pass
+                        if lf_enabled:
+                            try:
+                                lf_clear_playing_now(cfg.get("lastfm_session_key"))
+                            except Exception:
+                                pass
                     last_position = None
                     start_time = None
                     break
@@ -386,19 +448,32 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     was_paused = False
                     last_position = current_track
 
-                    # Submit playing_now
+                    # Submit playing_now to enabled backends
                     if not no_playing:
                         track = tracks_by_pos.get(current_track, {})
                         track.setdefault("album", info["title"])
                         track.setdefault("artist", info["artist"])
                         track.setdefault("release_mbid", info.get("release_mbid", ""))
-                        try:
-                            submit_playing_now(track, config_token)
-                            if verbose:
-                                print(f"Now: {track.get('title', current_track)}", file=sys.stderr)
-                        except Exception as e:
-                            if verbose:
-                                print(f"playing_now failed: {e}", file=sys.stderr)
+                        if lb_enabled:
+                            try:
+                                lb_submit_playing_now(
+                                    track, cfg.get("listenbrainz_token"))
+                                if verbose:
+                                    print(f"Now (LB): {track.get('title', current_track)}",
+                                          file=sys.stderr)
+                            except Exception as e:
+                                if verbose:
+                                    print(f"LB playing_now failed: {e}", file=sys.stderr)
+                        if lf_enabled:
+                            try:
+                                lf_submit_playing_now(
+                                    track, cfg.get("lastfm_session_key"))
+                                if verbose:
+                                    print(f"Now (LF): {track.get('title', current_track)}",
+                                          file=sys.stderr)
+                            except Exception as e:
+                                if verbose:
+                                    print(f"LF playing_now failed: {e}", file=sys.stderr)
 
             except ConnectionError:
                 # mpv not connected yet — wait; but if it was connected, it exited
@@ -419,10 +494,16 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
         if last_position is not None:
             _scrobble_track(last_position)
         if not no_playing:
-            try:
-                clear_playing_now(config_token)
-            except Exception:
-                pass
+            if lb_enabled:
+                try:
+                    lb_clear_playing_now(cfg.get("listenbrainz_token"))
+                except Exception:
+                    pass
+            if lf_enabled:
+                try:
+                    lf_clear_playing_now(cfg.get("lastfm_session_key"))
+                except Exception:
+                    pass
         if verbose:
             print("\nInterrupted", file=sys.stderr)
 
@@ -469,19 +550,51 @@ def cmd_cache(args, verbose, cfg):
         print(f"Cached (verify failed: {e})", file=sys.stderr)
 
 
-def cmd_history(args):
-    """Show recent scrobbles from ListenBrainz."""
-    from listenbrainz import _get_token
+def cmd_history(args, cfg):
+    """Show recent scrobbles from configured backends."""
+    service = args.service.lower() if hasattr(args, 'service') else "both"
 
+    if service in ("both", "listenbrainz"):
+        try:
+            token = get_listenbrainz_token(cfg) or _get_lb_token_from_file()
+        except LookupError as e:
+            print(f"ListenBrainz: {e}", file=sys.stderr)
+        else:
+            _print_lb_history(token, args.count)
+
+    if service in ("both", "lastfm"):
+        if lastfm_enabled(cfg):
+            try:
+                import lastfm as lastfm_mod
+                tracks = lastfm_mod.get_recent_tracks(limit=args.count)
+            except Exception as e:
+                print(f"Last.fm: {e}", file=sys.stderr)
+            else:
+                _print_lf_history(tracks)
+        else:
+            print("Last.fm: not configured (need api_key + session_key in config)",
+                  file=sys.stderr)
+
+
+def _get_lb_token_from_file():
+    """Fallback: read ListenBrainz token from ~/.lbtoken."""
+    from listenbrainz import TOKEN_FILE
     try:
-        token = _get_token()
-    except LookupError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        raw = TOKEN_FILE.read_text().strip()
+        if "=" in raw:
+            return raw.split("=", 1)[1].strip()
+        return raw
+    except FileNotFoundError:
+        raise LookupError(
+            f"ListenBrainz token not found at {TOKEN_FILE} — "
+            "put it in ~/.config/cd-scrobbler/config as listenbrainz_token="
+        )
 
+
+def _print_lb_history(token, count):
+    """Fetch and display ListenBrainz history."""
     import requests
 
-    # Get user ID first
     try:
         user_resp = requests.get(
             "https://api.listenbrainz.org/1/me/username",
@@ -491,28 +604,28 @@ def cmd_history(args):
         user_resp.raise_for_status()
         username = user_resp.json()["user_name"]
     except Exception as e:
-        print(f"Error fetching username: {e}", file=sys.stderr)
-        sys.exit(1)
+        print(f"ListenBrainz: error fetching username: {e}", file=sys.stderr)
+        return
 
-    # Fetch recent listens
     try:
         resp = requests.get(
             f"https://api.listenbrainz.org/1/user/{username}/listens",
-            params={"limit": args.count},
+            params={"limit": count},
             headers={"Authorization": f"Token {token}"},
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        print(f"Error fetching history: {e}", file=sys.stderr)
-        sys.exit(1)
+        print(f"ListenBrainz: error fetching history: {e}", file=sys.stderr)
+        return
 
     listens = data.get("payload", [])
     if not listens:
-        print("No recent scrobbles found.")
+        print("ListenBrainz: No recent scrobbles found.")
         return
 
+    print("ListenBrainz:")
     for listen in listens:
         meta = listen.get("track_metadata", {})
         artist = meta.get("artist_name", "Unknown")
@@ -521,7 +634,20 @@ def cmd_history(args):
         ts = listen.get("listened_at", 0)
         dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
         album_str = f" ({album})" if album else ""
-        print(f"{dt}  {artist} — {title}{album_str}")
+        print(f"  {dt}  {artist} — {title}{album_str}")
+
+
+def _print_lf_history(tracks):
+    """Display Last.fm history entries."""
+    print("Last.fm:")
+    for t in tracks:
+        artist = t["artist"]
+        title = t["title"]
+        album = t.get("album", "")
+        ts = t.get("timestamp", 0)
+        dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+        album_str = f" ({album})" if album else ""
+        print(f"  {dt}  {artist} — {title}{album_str}")
 
 
 def cmd_queue(args, verbose, cfg):
@@ -541,8 +667,7 @@ def cmd_queue(args, verbose, cfg):
             print(f"  [{i+1}] {dt}  {artist} — {title}  (retries: {retries})")
 
     if args.flush:
-        cfg_token = get_listenbrainz_token(cfg)
-        ok, remaining = flush_queue(lambda e: _submit_queued(e, cfg_token))
+        ok, remaining = flush_queue(lambda e: _submit_queued(e, cfg))
         if ok:
             print(f"Flushed: {ok} scrobble(s) submitted")
         if remaining:
@@ -613,6 +738,122 @@ def _lookup_by_cdtext(device, verbose=False):
         print(f"Match (CD-Text): {release['artist']} — {release['title']}",
               file=sys.stderr)
     return {"mbid": release["mbid"], **release}
+
+
+def cmd_lastfm(args, cfg, verbose=False):
+    """Manage Last.fm credentials."""
+    if not hasattr(args, 'lastfm_command') or not args.lastfm_command:
+        print("Usage: cdscrobble lastfm <command>")
+        print("  login    — Open browser to authorize and get a session key")
+        print("  set-key  — Manually set a session key (from the login flow)")
+        sys.exit(1)
+
+    cmd = args.lastfm_command
+
+    if cmd == "login":
+        _lastfm_login(cfg, verbose)
+    elif cmd == "set-key":
+        _lastfm_set_key(args.session_key, cfg)
+
+
+def _lastfm_login(cfg, verbose=False):
+    """Obtain a Last.fm session key via browser auth flow."""
+    import webbrowser
+    import urllib.parse
+
+    api_key = get_lastfm_api_key(cfg)
+    if not api_key:
+        print("Error: lastfm_api_key not set in config.", file=sys.stderr)
+        print("Add it to ~/.config/cd-scrobbler/config:\n", file=sys.stderr)
+        print("  [general]\n", file=sys.stderr)
+        print("  lastfm_api_key = YOUR_API_KEY\n", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        import pylast
+        ws = pylast.Webservice(api_key, "", "")
+        auth_url = ws.get_url()
+    except ImportError:
+        print("Error: pylast not installed. Run: pip install pylast",
+              file=sys.stderr)
+        sys.exit(1)
+    except Exception:
+        # Fallback: construct URL manually
+        auth_url = (
+            f"https://www.last.fm/api/auth/?api_key={api_key}"
+            f"&cb=file://{api_key}"
+        )
+
+    def _redact_url(url: str) -> str:
+        """Return a copy of *url* with sensitive query params masked."""
+        parsed = urllib.parse.urlparse(url)
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        sensitive = {
+            "api_key", "api_sig", "token",
+            "session_key", "sk", "password",
+        }
+        redacted_query = [
+            (k, "***" if k.lower() in sensitive else v)
+            for k, v in query
+        ]
+        redacted = parsed._replace(
+            query=urllib.parse.urlencode(redacted_query, doseq=True)
+        )
+        return urllib.parse.urlunparse(redacted)
+
+    redacted = _redact_url(auth_url)
+
+    print("Open this URL in your browser to authorize cd-scrobbler:")
+    print()
+    print(f"  {redacted}")
+    print()
+    print("After authorizing, paste the session key below:")
+    print("  (or use: cdscrobble lastfm set-key <key>)")
+    print()
+
+    try:
+        webbrowser.open(auth_url)
+    except Exception:
+        print("(Could not open browser — visit the URL manually.)",
+              file=sys.stderr)
+
+    key = input("Session key: ").strip()
+    if not key:
+        print("No key provided. Use 'cdscrobble lastfm set-key <key>' instead.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    _lastfm_set_key(key, cfg)
+
+
+def _lastfm_set_key(session_key: str, cfg: dict):
+    """Save a Last.fm session key to config."""
+    save_config({"lastfm_session_key": session_key.strip()})
+    # Verify it works
+    api_key = get_lastfm_api_key(cfg)
+    if not api_key:
+        print("Warning: no API key configured. Scrobbles will fail.",
+              file=sys.stderr)
+        return
+    try:
+        import pylast
+    except ImportError:
+        print("Error: pylast not installed. Run: pip install pylast",
+              file=sys.stderr)
+        return
+    try:
+        net = pylast.Network(
+            api_key=api_key,
+            session_key=session_key.strip(),
+            user_agent=USER_AGENT,
+        )
+        username = net.get_username()
+        print(f"Session key accepted. User: {username}")
+        print("Last.fm scrobbling is now active.")
+    except pylast.LastFMError as e:
+        print(f"Error: invalid session key ({e})", file=sys.stderr)
+        print("Run 'cdscrobble lastfm login' to get a new key.",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

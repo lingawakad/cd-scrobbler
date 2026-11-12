@@ -12,6 +12,8 @@ DEFAULTS = {
     "mpv_socket": "",
     "no_playing_now": "false",
     "listenbrainz_token": "",
+    "lastfm_api_key": "",
+    "lastfm_session_key": "",
 }
 
 
@@ -73,3 +75,18 @@ def no_playing_now(config: dict) -> bool:
 def get_listenbrainz_token(config: dict) -> str | None:
     """Return the configured ListenBrainz token, or None."""
     return config.get("listenbrainz_token", "").strip() or None
+
+
+def get_lastfm_api_key(config: dict) -> str | None:
+    """Return the configured Last.fm API key, or None."""
+    return config.get("lastfm_api_key", "").strip() or None
+
+
+def get_lastfm_session_key(config: dict) -> str | None:
+    """Return the configured Last.fm session key, or None."""
+    return config.get("lastfm_session_key", "").strip() or None
+
+
+def lastfm_enabled(config: dict) -> bool:
+    """Check if both API key and session key are configured."""
+    return bool(get_lastfm_api_key(config) and get_lastfm_session_key(config))
