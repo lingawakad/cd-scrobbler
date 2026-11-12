@@ -30,6 +30,8 @@ from offline_queue import enqueue, flush_queue, queue_size
 
 USER_AGENT = "cd-scrobbler/0.3.0 (recent8571@proton.me)"
 
+LOG_FILE = Path.home() / ".config" / "cd-scrobbler" / "monitor.log"
+
 
 def _print_tracks(info: dict) -> None:
     """Print release artist, title, and track listing."""
@@ -543,18 +545,24 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
     if pid > 0:
         # Parent: return control to the shell immediately
         if verbose:
-            print("Monitor daemon started (PID {})".format(pid), file=sys.stderr)
+            log_path = str(LOG_FILE)
+            print("Monitor daemon started (PID {}) — tail -f {}".format(pid, log_path),
+                  file=sys.stderr)
         return
 
     # Child: detach from terminal and run monitor
     os.setsid()
-    # Redirect stdio to devnull so child doesn't hold onto tty
-    sys.stdin.close()
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    os.dup2(devnull, 0)
-    os.dup2(devnull, 1)
-    os.dup2(devnull, 2)
+
+    # Redirect stdio to log file (not /dev/null) so monitor output is inspectable
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull, 0)  # stdin from /dev/null
     os.close(devnull)
+
+    os.makedirs(str(LOG_FILE.parent), exist_ok=True)
+    log_fd = os.open(str(LOG_FILE), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    os.dup2(log_fd, 1)  # stdout -> log
+    os.dup2(log_fd, 2)  # stderr -> log
+    os.close(log_fd)
 
     # Re-run monitor in the background child
     _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg)
