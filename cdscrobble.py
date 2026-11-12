@@ -854,6 +854,7 @@ def _lastfm_mobile_login(cfg, verbose=False):
     try:
         network = pylast.LastFMNetwork(
             api_key=api_key,
+            api_secret=api_secret,
             username=username,
             password_hash=pylast.md5(password),
         )
