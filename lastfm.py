@@ -32,7 +32,6 @@ def _ensure_network(config: dict):
         api_key=api_key,
         api_secret=api_secret,
         session_key=session_key,
-        user_agent=USER_AGENT,
     )
     try:
         _username = _network.get_username()
