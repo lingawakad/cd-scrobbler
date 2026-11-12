@@ -12,6 +12,7 @@ def _get_network(config: dict | None = None) -> pylast.LastFMNetwork:
     if config is None:
         config = {}
     api_key = get_lastfm_api_key(config)
+    api_secret = get_lastfm_api_secret(config)
     session_key = get_lastfm_session_key(config)
     if not api_key or not session_key:
         raise LookupError("Last.fm credentials not configured")
@@ -19,10 +20,11 @@ def _get_network(config: dict | None = None) -> pylast.LastFMNetwork:
     if (
         getattr(pylast, "_cd_scrobbler_network", None) is not None
         and getattr(pylast._cd_scrobbler_network, "api_key", None) == api_key
+        and getattr(pylast._cd_scrobbler_network, "api_secret", None) == api_secret
         and getattr(pylast._cd_scrobbler_network, "session_key", None) == session_key
     ):
         return pylast._cd_scrobbler_network
-    net = pylast.LastFMNetwork(api_key=api_key, session_key=session_key)
+    net = pylast.LastFMNetwork(api_key=api_key, api_secret=api_secret, session_key=session_key)
     pylast._cd_scrobbler_network = net
     return net
 
