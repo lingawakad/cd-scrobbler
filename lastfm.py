@@ -7,19 +7,28 @@ from config import get_lastfm_api_key, get_lastfm_api_secret, get_lastfm_session
 USER_AGENT = "cd-scrobbler/0.3.0 (recent8571@proton.me)"
 
 # Cached network instance — created once and reused.
-_network = None
-_username = None
+_cached_network = None
+_cached_username = None
 
 
-def _ensure_network(config: dict):
-    """Lazily create and cache a pylast Network instance."""
-    global _network, _username
-    if _network is not None:
-        return _network, _username
+def _get_scrobbler(config: dict):
+    """Return a Last.fm Scrobbler for the configured user.
+
+    Caches the Network instance so we don't re-authenticate on every call.
+    Handles both old pylast (get_scrobbler method) and new pylast (scrobbler attr).
+    """
+    global _cached_network, _cached_username
+
+    if _cached_network is not None:
+        user = _cached_network.get_user(_cached_username)
+        # pylast 2.x+: scrobbler is a property, not a method
+        if hasattr(user, "get_scrobbler"):
+            return user.get_scrobbler()
+        return user.scrobbler
 
     api_key = get_lastfm_api_key(config)
-    session_key = get_lastfm_session_key(config)
     api_secret = get_lastfm_api_secret(config)
+    session_key = get_lastfm_session_key(config)
 
     if not api_key or not session_key:
         raise LookupError(
@@ -28,20 +37,15 @@ def _ensure_network(config: dict):
             "and run: cdscrobble lastfm login"
         )
 
-    _network = pylast.LastFMNetwork(
+    _cached_network = pylast.Network(
         api_key=api_key,
-        api_secret=api_secret,
         session_key=session_key,
     )
-    try:
-        _username = _network.get_username()
-    except Exception:
-        # Session may be expired or invalid — reset cache so next call retries fresh
-        _network = None
-        _username = None
-        raise
-
-    return _network, _username
+    _cached_username = _cached_network.get_username()
+    user = _cached_network.get_user(_cached_username)
+    if hasattr(user, "get_scrobbler"):
+        return user.get_scrobbler()
+    return user.scrobbler
 
 
 def submit_listen(
@@ -50,8 +54,7 @@ def submit_listen(
     config: dict,
 ) -> None:
     """Submit a single listen to Last.fm."""
-    net, username = _ensure_network(config)
-    scrobbler = net.get_user(username).get_scrobbler()
+    scrobbler = _get_scrobbler(config)
     scrobbler.scrobble(
         artist=track["artist"],
         title=track["title"],
@@ -65,8 +68,7 @@ def submit_playing_now(
     config: dict,
 ) -> None:
     """Update Now Playing on Last.fm."""
-    net, username = _ensure_network(config)
-    scrobbler = net.get_user(username).get_scrobbler()
+    scrobbler = _get_scrobbler(config)
     scrobbler.update_now_playing(
         artist=track["artist"],
         title=track["title"],
@@ -86,7 +88,11 @@ def get_recent_tracks(
     """Fetch recent scrobbles from Last.fm."""
     if config is None:
         config = {}
-    net, username = _ensure_network(config)
+    net = pylast.Network(
+        api_key=get_lastfm_api_key(config),
+        session_key=get_lastfm_session_key(config),
+    )
+    username = net.get_username()
     user = net.get_user(username)
     track_info = user.get_recent_tracks(limit=limit)
 
