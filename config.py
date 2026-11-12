@@ -73,23 +73,31 @@ def no_playing_now(config: dict) -> bool:
     return config.get("no_playing_now", "false").lower() == "true"
 
 
-def get_listenbrainz_token(config: dict) -> str | None:
+def get_listenbrainz_token(config: dict | None = None) -> str | None:
     """Return the configured ListenBrainz token, or None."""
+    if config is None:
+        config = load_config()
     return config.get("listenbrainz_token", "").strip() or None
 
 
-def get_lastfm_api_key(config: dict) -> str | None:
+def get_lastfm_api_key(config: dict | None = None) -> str | None:
     """Return the configured Last.fm API key, or None."""
+    if config is None:
+        config = load_config()
     return config.get("lastfm_api_key", "").strip() or None
 
 
-def get_lastfm_api_secret(config: dict) -> str | None:
+def get_lastfm_api_secret(config: dict | None = None) -> str | None:
     """Return the configured Last.fm API secret, or None."""
+    if config is None:
+        config = load_config()
     return config.get("lastfm_api_secret", "").strip() or None
 
 
-def get_lastfm_session_key(config: dict) -> str | None:
+def get_lastfm_session_key(config: dict | None = None) -> str | None:
     """Return the configured Last.fm session key, or None."""
+    if config is None:
+        config = load_config()
     return config.get("lastfm_session_key", "").strip() or None
 
 
