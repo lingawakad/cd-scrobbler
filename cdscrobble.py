@@ -758,6 +758,9 @@ def cmd_lastfm(args, cfg, verbose=False):
 
 def _lastfm_login(cfg, verbose=False):
     """Obtain a Last.fm session key via browser auth flow."""
+    import webbrowser
+    import urllib.parse
+
     api_key = get_lastfm_api_key(cfg)
     if not api_key:
         print("Error: lastfm_api_key not set in config.", file=sys.stderr)
@@ -766,38 +769,43 @@ def _lastfm_login(cfg, verbose=False):
         print("  lastfm_api_key = YOUR_API_KEY\n", file=sys.stderr)
         sys.exit(1)
 
-    # Use pylast's built-in session key flow
-    import webbrowser
-    import urllib.parse
-
     try:
         import pylast
-        session = pylast.SessionKeyKeeper.instance()
-        network = pylast.Network(api_key, session_key="",
-                                 user_agent=USER_AGENT)
-        # Note: session_key flow in pylast requires the user to have called
-        # signin() previously. Since this is a new install, we need to
-        # generate the auth URL manually.
+        ws = pylast.Webservice(api_key, "", "")
+        auth_url = ws.get_url()
     except ImportError:
         print("Error: pylast not installed. Run: pip install pylast",
               file=sys.stderr)
         sys.exit(1)
-
-    # Generate auth URL
-    ws = pylast.Webservice(api_key, "", "")
-    try:
-        auth_url = ws.get_url()
     except Exception:
         # Fallback: construct URL manually
-        import pylast
         auth_url = (
             f"https://www.last.fm/api/auth/?api_key={api_key}"
             f"&cb=file://{api_key}"
         )
 
+    def _redact_url(url: str) -> str:
+        """Return a copy of *url* with sensitive query params masked."""
+        parsed = urllib.parse.urlparse(url)
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        sensitive = {
+            "api_key", "api_sig", "token",
+            "session_key", "sk", "password",
+        }
+        redacted_query = [
+            (k, "***" if k.lower() in sensitive else v)
+            for k, v in query
+        ]
+        redacted = parsed._replace(
+            query=urllib.parse.urlencode(redacted_query, doseq=True)
+        )
+        return urllib.parse.urlunparse(redacted)
+
+    redacted = _redact_url(auth_url)
+
     print("Open this URL in your browser to authorize cd-scrobbler:")
     print()
-    print(f"  {auth_url}")
+    print(f"  {redacted}")
     print()
     print("After authorizing, paste the session key below:")
     print("  (or use: cdscrobble lastfm set-key <key>)")
