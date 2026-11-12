@@ -152,7 +152,7 @@ def _submit_queued(entry: dict, config: dict) -> None:
 
     if entry.get("listen_type") == "playing_now":
         if backend == "lastfm":
-            lf_submit_playing_now(track, config.get("lastfm_session_key"))
+            lf_submit_playing_now(track, config)
         else:
             lb_submit_playing_now(track, config.get("listenbrainz_token"))
         return
@@ -161,7 +161,7 @@ def _submit_queued(entry: dict, config: dict) -> None:
         raise ValueError("Queue entry missing 'listened_at'")
 
     if backend == "lastfm":
-        lf_submit_listen(track, listened_at, config.get("lastfm_session_key"))
+        lf_submit_listen(track, listened_at, config)
     else:
         lb_submit_listen(track, listened_at, config.get("listenbrainz_token"))
 
@@ -355,7 +355,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                             print(f"LB scrobble failed, queued: {e}", file=sys.stderr)
                 if lf_enabled:
                     try:
-                        lf_submit_listen(track, ts, cfg.get("lastfm_session_key"))
+                        lf_submit_listen(track, ts, cfg)
                         if verbose:
                             print(f"Scrobbled (LF): {track.get('title', position)}",
                                   file=sys.stderr)
@@ -399,7 +399,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                                 pass
                         if lf_enabled:
                             try:
-                                lf_clear_playing_now(cfg.get("lastfm_session_key"))
+                                lf_clear_playing_now(cfg)
                             except Exception:
                                 pass
                     last_position = None
@@ -466,8 +466,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                                     print(f"LB playing_now failed: {e}", file=sys.stderr)
                         if lf_enabled:
                             try:
-                                lf_submit_playing_now(
-                                    track, cfg.get("lastfm_session_key"))
+                                lf_submit_playing_now(track, cfg)
                                 if verbose:
                                     print(f"Now (LF): {track.get('title', current_track)}",
                                           file=sys.stderr)
@@ -501,7 +500,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     pass
             if lf_enabled:
                 try:
-                    lf_clear_playing_now(cfg.get("lastfm_session_key"))
+                    lf_clear_playing_now(cfg)
                 except Exception:
                     pass
         if verbose:

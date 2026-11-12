@@ -7,10 +7,10 @@ from config import get_lastfm_api_key, get_lastfm_session_key
 USER_AGENT = "cd-scrobbler/0.3.0 (recent8571@proton.me)"
 
 
-def _get_network():
+def _get_network(config: dict):
     """Return a pylast Network instance, or raise if credentials are missing."""
-    api_key = get_lastfm_api_key()
-    session_key = get_lastfm_session_key()
+    api_key = get_lastfm_api_key(config)
+    session_key = get_lastfm_session_key(config)
     if not api_key or not session_key:
         raise LookupError(
             "Last.fm credentials not configured — "
@@ -24,9 +24,9 @@ def _get_network():
     )
 
 
-def _get_scrobbler():
+def _get_scrobbler(config: dict):
     """Return a Last.fm Scrobbler for the configured user."""
-    net = _get_network()
+    net = _get_network(config)
     username = net.get_username()
     return net.get_user(username).get_scrobbler()
 
@@ -34,14 +34,15 @@ def _get_scrobbler():
 def submit_listen(
     track: dict,
     listened_at: int,
-    config_token: str | None = None,
+    config: dict,
 ) -> None:
     """Submit a single listen to Last.fm.
 
     track: dict with keys — artist, title, album (optional).
     listened_at: Unix timestamp of when playback started.
+    config: config dict with lastfm_api_key and lastfm_session_key.
     """
-    scrobbler = _get_scrobbler()
+    scrobbler = _get_scrobbler(config)
     scrobbler.scrobble(
         artist=track["artist"],
         title=track["title"],
@@ -52,10 +53,10 @@ def submit_listen(
 
 def submit_playing_now(
     track: dict,
-    config_token: str | None = None,
+    config: dict,
 ) -> str:
     """Update Now Playing on Last.fm. Returns recording_mbid if available."""
-    scrobbler = _get_scrobbler()
+    scrobbler = _get_scrobbler(config)
     scrobbler.update_now_playing(
         artist=track["artist"],
         title=track["title"],
@@ -64,20 +65,22 @@ def submit_playing_now(
     return track.get("recording_mbid", "")
 
 
-def clear_playing_now(config_token: str | None = None) -> None:
+def clear_playing_now(config: dict) -> None:
     """Last.fm doesn't have a clear Now Playing endpoint — no-op."""
     pass
 
 
 def get_recent_tracks(
     limit: int = 25,
-    config_token: str | None = None,
+    config: dict | None = None,
 ) -> list[dict]:
     """Fetch recent scrobbles from Last.fm.
 
     Returns list of dicts: artist, title, album, timestamp.
     """
-    net = _get_network()
+    if config is None:
+        config = {}
+    net = _get_network(config)
     username = net.get_username()
     user = net.get_user(username)
     track_info = user.get_recent_tracks(limit=limit)
