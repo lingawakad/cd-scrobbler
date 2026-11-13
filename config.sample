@@ -1,0 +1,26 @@
+# cd-scrobbler configuration file
+# Location: ~/.config/cd-scrobbler/config
+#
+# Required at minimum: listenbrainz_token
+# (Last.fm is optional — see README for setup)
+
+[general]
+# CD/DVD device path (leave blank for auto-detect)
+device =
+
+# Verbose logging to stderr during play
+verbose = false
+
+# mpv IPC socket path (leave blank for auto-detect)
+mpv_socket =
+
+# Disable "playing now" notifications to backends
+no_playing_now = false
+
+# ListenBrainz — get from https://listenbrainz.org/settings/
+listenbrainz_token =
+
+# Last.fm — optional, skip if you don't use it
+lastfm_api_key =
+lastfm_api_secret =
+lastfm_session_key =
