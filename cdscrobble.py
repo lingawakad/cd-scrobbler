@@ -629,7 +629,7 @@ def cmd_history(args, cfg):
                 import lastfm as lastfm_mod
                 tracks = lastfm_mod.get_recent_tracks(limit=args.count, config=cfg)
             except Exception as e:
-                print(f"Last.fm: {e}", file=sys.stderr)
+                print(f"Last.fm: {type(e).__name__}: {e}", file=sys.stderr)
             else:
                 _print_lf_history(tracks)
         else:
