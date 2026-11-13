@@ -28,7 +28,7 @@ from listenbrainz import submit_listen as lb_submit_listen, submit_playing_now a
 from lastfm import submit_listen as lf_submit_listen, submit_playing_now as lf_submit_playing_now, clear_playing_now as lf_clear_playing_now
 from offline_queue import enqueue, flush_queue, queue_size
 
-USER_AGENT = "cd-scrobbler/0.3.0 (recent8571@proton.me)"
+USER_AGENT = "cd-scrobbler/0.5.0 (recent8571@proton.me)"
 
 LOG_FILE = Path.home() / ".config" / "cd-scrobbler" / "monitor.log"
 
@@ -61,8 +61,6 @@ def main():
     p_play.add_argument("-d", "--device", default=None,
                         help="CD/DVD device (default: auto-detect)")
     p_play.add_argument("-v", "--verbose", action="store_true")
-    p_play.add_argument("--start", action="store_true",
-                        help="Start playback after lookup (mpv)")
     p_play.add_argument("--no-playing-now", action="store_true",
                         help="Skip playing_now notifications")
     p_play.add_argument("--socket", default=None,
@@ -290,25 +288,24 @@ def cmd_play(args, verbose, cfg, cfg_token=None):
 
     no_playing = args.no_playing_now or no_playing_now(cfg)
 
-    # Start playback if requested
-    if args.start:
-        # Ensure parent directory exists for the IPC socket
-        Path(sock_path).parent.mkdir(parents=True, exist_ok=True)
-        subprocess.Popen(
-            ["mpv", "--demuxer-max-bytes=20MiB",
-             "--input-ipc-server=" + sock_path,
-             "--ao=pipewire", "--gapless-audio", f"cdda://{device}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        if verbose:
-            print("Playback started", file=sys.stderr)
-        # Wait for mpv to be ready and playing
-        if not wait_for_mpv(sock_path, verbose=verbose):
-            print("Warning: mpv did not start within 30s", file=sys.stderr)
-        # Daemonize: fork so the monitor runs in the background,
-        # releasing the prompt immediately.
-        _daemonize_monitor(info, sock_path, verbose, no_playing, cfg)
-        return
+    # Ensure parent directory exists for the IPC socket
+    Path(sock_path).parent.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(
+        ["mpv", "--demuxer-max-bytes=20MiB",
+         "--input-ipc-server=" + sock_path,
+         "--ao=pipewire", "--gapless-audio", f"cdda://{device}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if verbose:
+        print("Playback started", file=sys.stderr)
+    # Wait for mpv to be ready and playing
+    if not wait_for_mpv(sock_path, verbose=verbose):
+        print("Warning: mpv did not start within 30s", file=sys.stderr)
+
+    # Daemonize: fork so the monitor runs in the background,
+    # releasing the prompt immediately.
+    _daemonize_monitor(info, sock_path, verbose, no_playing, cfg)
+    return
 
 
 def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool, cfg: dict):
@@ -329,6 +326,21 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     accumulated_play = 0.0     # total playtime for current track across pauses
     lb_enabled = bool(get_listenbrainz_token(cfg))
     lf_enabled = lastfm_enabled(cfg)
+
+    def _clear_playing_now():
+        """Clear playing_now on both backends (if configured)."""
+        if no_playing:
+            return
+        if lb_enabled:
+            try:
+                lb_clear_playing_now(cfg.get("listenbrainz_token"))
+            except Exception:
+                pass
+        if lf_enabled:
+            try:
+                lf_clear_playing_now(cfg)
+            except Exception:
+                pass
 
     def _scrobble_track(position):
         """Scrobble a track if played long enough (to both enabled backends)."""
@@ -395,17 +407,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 # Detect playback stopped — scrobble current track then exit
                 if status == "Stopped" and last_position is not None:
                     _scrobble_track(last_position)
-                    if not no_playing:
-                        if lb_enabled:
-                            try:
-                                lb_clear_playing_now(cfg.get("listenbrainz_token"))
-                            except Exception:
-                                pass
-                        if lf_enabled:
-                            try:
-                                lf_clear_playing_now(cfg)
-                            except Exception:
-                                pass
+                    _clear_playing_now()
                     last_position = None
                     start_time = None
                     break
@@ -418,17 +420,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     and pos_s >= total_duration
                 ):
                     _scrobble_track(last_position)
-                    if not no_playing:
-                        if lb_enabled:
-                            try:
-                                lb_clear_playing_now(cfg.get("listenbrainz_token"))
-                            except Exception:
-                                pass
-                        if lf_enabled:
-                            try:
-                                lf_clear_playing_now(cfg)
-                            except Exception:
-                                pass
+                    _clear_playing_now()
                     last_position = None
                     start_time = None
                     break
@@ -519,17 +511,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     except KeyboardInterrupt:
         if last_position is not None:
             _scrobble_track(last_position)
-        if not no_playing:
-            if lb_enabled:
-                try:
-                    lb_clear_playing_now(cfg.get("listenbrainz_token"))
-                except Exception:
-                    pass
-            if lf_enabled:
-                try:
-                    lf_clear_playing_now(cfg)
-                except Exception:
-                    pass
+        _clear_playing_now()
         if verbose:
             print("\nInterrupted", file=sys.stderr)
 
