@@ -633,7 +633,12 @@ def cmd_history(args, cfg):
             else:
                 _print_lf_history(tracks)
         else:
-            print("Last.fm: not configured (need api_key + session_key in config)",
+            print("Last.fm: credentials not configured.", file=sys.stderr)
+            print("  1. Register at https://www.last.fm/api/applications (get api_key + api_secret)",
+                  file=sys.stderr)
+            print("  2. Run: cdscrobble lastfm login  (enter username + password)",
+                  file=sys.stderr)
+            print("  3. Or set manually: cdscrobble lastfm set-key <your_session_key>",
                   file=sys.stderr)
 
 
@@ -657,26 +662,19 @@ def _print_lb_history(token, count):
     import requests
 
     try:
-        user_resp = requests.get(
-            "https://api.listenbrainz.org/1/me/username",
-            headers={"Authorization": f"Token {token}"},
-            timeout=10,
-        )
-        user_resp.raise_for_status()
-        username = user_resp.json()["user_name"]
-    except Exception as e:
-        print(f"ListenBrainz: error fetching username: {e}", file=sys.stderr)
-        return
-
-    try:
+        # ListenBrainz deprecated 1/me/username; use token-based fetch directly.
+        # The ~token/listens pattern is not reliable, so we use 1/me/listens
+        # which returns listens for the authenticated user without needing username.
         resp = requests.get(
-            f"https://api.listenbrainz.org/1/user/{username}/listens",
-            params={"limit": count},
+            "https://api.listenbrainz.org/1/me/listens",
+            params={"count": count},
             headers={"Authorization": f"Token {token}"},
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
+        # API returns {"payload": {"listens": [...]}} or may omit "payload" on empty
+        listens = data.get("payload", {}).get("listens", data.get("listens", []))
     except Exception as e:
         print(f"ListenBrainz: error fetching history: {e}", file=sys.stderr)
         return

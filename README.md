@@ -56,20 +56,20 @@ All commands support `-d` (device, default auto-detected), `-v` (verbose), and `
 
 ## Config
 
-Create `~/.config/cd-scrobbler/config`:
+Copy the sample config, fill in your token, and move it to the right location:
+
+```bash
+cp config.sample ~/.config/cd-scrobbler/config
+```
+
+Edit `~/.config/cd-scrobbler/config` and set at minimum:
 
 ```ini
 [general]
-device = /dev/sr1
-verbose = true
-mpv_socket = /tmp/mpvsocket
-no_playing_now = false
 listenbrainz_token = your-token-here
-lastfm_api_key = your-api-key
-lastfm_session_key = your-session-key
 ```
 
-CLI arguments override config file values.
+See `config.sample` in this repo for all available options.
 
 ## Features
 
