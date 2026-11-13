@@ -12,6 +12,7 @@ DEFAULTS = {
     "mpv_socket": "",
     "no_playing_now": "false",
     "listenbrainz_token": "",
+    "listenbrainz_username": "",
     "lastfm_api_key": "",
     "lastfm_api_secret": "",
     "lastfm_session_key": "",
@@ -78,6 +79,13 @@ def get_listenbrainz_token(config: dict | None = None) -> str | None:
     if config is None:
         config = load_config()
     return config.get("listenbrainz_token", "").strip() or None
+
+
+def get_listenbrainz_username(config: dict | None = None) -> str | None:
+    """Return the configured ListenBrainz username, or None."""
+    if config is None:
+        config = load_config()
+    return config.get("listenbrainz_username", "").strip() or None
 
 
 def get_lastfm_api_key(config: dict | None = None) -> str | None:
