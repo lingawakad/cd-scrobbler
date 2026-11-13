@@ -26,6 +26,7 @@ from musicbrainz import (
     _load_cache,
     _get_cached,
     _set_cached,
+    _flush_cache,
 )
 from listenbrainz import submit_listen as lb_submit_listen, submit_playing_now as lb_submit_playing_now, clear_playing_now as lb_clear_playing_now
 from lastfm import submit_listen as lf_submit_listen, submit_playing_now as lf_submit_playing_now, clear_playing_now as lf_clear_playing_now
@@ -224,6 +225,9 @@ def cmd_lookup(args, verbose, cfg):
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Ensure any pending cache writes are persisted
+    _flush_cache(_load_cache())
+
 
 def cmd_play(args, verbose, cfg, cfg_token=None):
     """Identify CD, start playback via mpv, scrobble tracks."""
@@ -306,6 +310,9 @@ def cmd_play(args, verbose, cfg, cfg_token=None):
     # Daemonize: fork so the monitor runs in the background,
     # releasing the prompt immediately.
     _daemonize_monitor(info, sock_path, verbose, no_playing, cfg)
+
+    # Ensure any pending cache writes are persisted before exit
+    _flush_cache(_load_cache())
     return
 
 
@@ -325,6 +332,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     was_paused = False         # track pause state to avoid spamming messages
     track_start = None         # wall-clock time when current track first started
     accumulated_play = 0.0     # total playtime for current track across pauses
+    current_msid = ""            # recording_msid from LB playing_now (for correlation)
     lb_enabled = bool(get_listenbrainz_token(cfg))
     lf_enabled = lastfm_enabled(cfg)
 
@@ -354,6 +362,8 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 track.setdefault("album", info["title"])
                 track.setdefault("artist", info["artist"])
                 track.setdefault("release_mbid", info.get("release_mbid", ""))
+                if current_msid:
+                    track["recording_msid"] = current_msid
                 ts = int(track_start)
                 if lb_enabled:
                     try:
@@ -466,6 +476,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     track_start = time.time()
                     accumulated_play = 0.0
                     was_paused = False
+                    current_msid = ""  # reset for new track
                     last_position = current_track
 
                     # Submit playing_now to enabled backends
@@ -476,12 +487,14 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         track.setdefault("release_mbid", info.get("release_mbid", ""))
                         if lb_enabled:
                             try:
-                                lb_submit_playing_now(
+                                msid = lb_submit_playing_now(
                                     track, cfg.get("listenbrainz_token"))
+                                current_msid = msid if msid else ""
                                 if verbose:
                                     print(f"Now (LB): {track.get('title', current_track)}",
                                           file=sys.stderr)
                             except Exception as e:
+                                current_msid = ""
                                 if verbose:
                                     print(f"LB playing_now failed: {e}", file=sys.stderr)
                         if lf_enabled:
@@ -591,6 +604,9 @@ def cmd_cache(args, verbose, cfg):
         print(f"Cached: {disc_id} -> {info['artist']} — {info['title']}")
     except Exception as e:
         print(f"Cached (verify failed: {e})", file=sys.stderr)
+
+    # Ensure any pending cache writes are persisted
+    _flush_cache(_load_cache())
 
 
 def cmd_history(args, cfg):

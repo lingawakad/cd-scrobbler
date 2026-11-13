@@ -6,6 +6,7 @@ import musicbrainzngs
 import re
 import socket
 import sys
+import time
 from pathlib import Path
 
 from mbid import DISC_ID_RE
@@ -16,6 +17,7 @@ CACHE_DIR = Path.home() / ".cache" / "cd-scrobbler"
 CACHE_FILE = CACHE_DIR / "musicbrainz.json"
 CACHE_MAX_ENTRIES = 500
 _toc_score_cache: dict[str, float] = {}
+_cache_last_write = 0.0  # debounce coalescing (seconds)
 
 
 def _load_cache() -> dict:
@@ -26,6 +28,13 @@ def _load_cache() -> dict:
 
 
 def _save_cache(cache: dict) -> None:
+    # Debounce: skip write if we wrote within 300ms (coalesces bursts like TOC scoring)
+    global _cache_last_write
+    now = time.time()
+    if now - _cache_last_write < 0.3:
+        return
+    _cache_last_write = now
+
     # Trim oldest entries if cache exceeds limit (simple FIFO)
     if len(cache) > CACHE_MAX_ENTRIES:
         keys = list(cache.keys())
@@ -41,6 +50,13 @@ def _get_cached(key: str, cache: dict):
 
 def _set_cached(key: str, value, cache: dict) -> None:
     cache[key] = value
+    _save_cache(cache)
+
+
+def _flush_cache(cache: dict) -> None:
+    """Force-write the cache file (for use at natural boundaries like end-of-lookup)."""
+    global _cache_last_write
+    _cache_last_write = 0  # bypass debounce
     _save_cache(cache)
 
 

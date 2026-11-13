@@ -22,16 +22,19 @@ def _get_network(config: dict | None = None) -> pylast.LastFMNetwork:
     session_key = get_lastfm_session_key(config)
     if not api_key or not session_key:
         raise LookupError("Last.fm credentials not configured")
-    # Reuse module-level default if credentials match
-    if (
-        getattr(pylast, "_cd_scrobbler_network", None) is not None
-        and getattr(pylast._cd_scrobbler_network, "api_key", None) == api_key
-        and getattr(pylast._cd_scrobbler_network, "api_secret", None) == api_secret
-        and getattr(pylast._cd_scrobbler_network, "session_key", None) == session_key
-    ):
-        return pylast._cd_scrobbler_network
-    net = pylast.LastFMNetwork(api_key=api_key, api_secret=api_secret, session_key=session_key)
-    pylast._cd_scrobbler_network = net
+
+    # Module-level cache keyed by credential tuple (stable, no pylast introspection)
+    cache: dict[tuple, pylast.LastFMNetwork] = getattr(
+        _get_network, "_cache", {}
+    )
+    key = (api_key, api_secret, session_key)
+    if key in cache:
+        return cache[key]
+
+    net = pylast.LastFMNetwork(
+        api_key=api_key, api_secret=api_secret, session_key=session_key,
+    )
+    cache[key] = net
     return net
 
 
