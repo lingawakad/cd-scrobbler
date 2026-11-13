@@ -11,6 +11,10 @@ def _get_default_socket() -> str:
     return "/tmp/mpvsocket"
 
 
+class MpvDisconnected(Exception):
+    """mpv IPC socket closed unexpectedly."""
+
+
 def _mpv_request(sock_path: str, command: list, timeout: float = 5) -> dict:
     """Send a JSON IPC request to mpv and return the response."""
     req = {"command": command}
@@ -93,6 +97,90 @@ def mpv_get_position(sock_path: str) -> float:
 def mpv_get_duration(sock_path: str) -> float:
     """Return total duration in seconds."""
     return float(mpv_get_property(sock_path, "duration") or 0)
+
+
+def mpv_events(sock_path: str, event_timeout: float = 2.0):
+    """Yield mpv event dicts from the IPC socket.
+
+    Connects to mpv, wakes it with a probe, then enters an event stream.
+    Yields dicts like {"event": "end-file"},
+    {"event": "property-change", "property": "time-pos", "data": ...},
+    etc.  When mpv disconnects the generator stops (caller gets
+    ``StopIteration``).  On transient connect failures it retries once
+    before giving up.
+    """
+    # Try to establish a persistent connection with mpv.
+    s = None
+    for _ in range(100):  # ~30s total wait
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(event_timeout)
+        try:
+            s.connect(sock_path)
+            break
+        except (FileNotFoundError, ConnectionRefusedError, OSError):
+            s.close()
+            s = None
+            time.sleep(0.3)
+            continue
+
+    if s is None:
+        raise ConnectionError(f"Cannot connect to mpv at {sock_path}")
+
+    try:
+        # Wake mpv so it sends initial events and starts the stream.
+        try:
+            s.sendall(b'{"command": ["get_property", "time-pos"]}\n')
+            # Drain the probe response (may not arrive, that's ok).
+            try:
+                while True:
+                    try:
+                        s.recv(4096)
+                    except socket.timeout:
+                        break
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        s.settimeout(event_timeout)
+        decoder = json.JSONDecoder()
+        buf = b""
+        while True:
+            try:
+                chunk = s.recv(4096)
+                if not chunk:
+                    raise MpvDisconnected("socket closed")
+                buf += chunk
+            except socket.timeout:
+                # No new data — nothing to yield, loop back to recv
+                continue
+
+            # Decode any complete JSON objects from the buffer.
+            text = buf.decode("utf-8", errors="replace")
+            buf = b""
+            i = 0
+            while i < len(text):
+                # Skip whitespace / newlines between objects.
+                while i < len(text) and text[i] in (" ", "\n", "\r", "\t"):
+                    i += 1
+                if i >= len(text):
+                    break
+                try:
+                    obj, end = decoder.raw_decode(text, i)
+                    i = end
+                    if isinstance(obj, dict) and "event" in obj:
+                        yield obj
+                    # else: probe response, skip
+                except json.JSONDecodeError:
+                    i += 1  # skip bad char, try next position
+
+    except MpvDisconnected:
+        pass  # mpv died — caller sees no more events
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
 
 
 def wait_for_mpv(sock_path: str, timeout: int = 30, verbose: bool = False) -> bool:
