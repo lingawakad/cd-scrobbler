@@ -8,7 +8,7 @@ from musicbrainz import CACHE_DIR
 
 QUEUE_FILE = CACHE_DIR / "queue.jsonl"
 MAX_RETRIES = 3
-RETRY_DELAY = 60  # seconds between retries (not enforced, just metadata)
+INITIAL_RETRY_DELAY = 30  # seconds — start with 30s, double each retry
 
 
 def load_queue() -> list[dict]:
@@ -48,24 +48,38 @@ def dequeue() -> list[dict]:
 
 
 def flush_queue(submit_fn) -> tuple[int, int]:
-    """Try to submit all queued entries. Returns (success_count, remaining_count)."""
+    """Try to submit all queued entries. Returns (success_count, remaining_count).
+    
+    Entries use exponential backoff: 30s, 60s, 120s between retries.
+    """
     queue = load_queue()
     if not queue:
         return 0, 0
 
     success = 0
     remaining = []
+    now = time.time()
 
     for entry in queue:
         retries = entry.get("retries", 0)
         if retries >= MAX_RETRIES:
             # Give up after too many retries
             continue
+
+        # Exponential backoff: delay doubles each retry
+        delay = INITIAL_RETRY_DELAY * (2 ** (retries - 1)) if retries else 0
+        queued_at = entry.get("queued_at", 0)
+        if now - queued_at < delay:
+            # Not yet time to retry
+            remaining.append(entry)
+            continue
+
         try:
             submit_fn(entry)
             success += 1
         except Exception:
             entry["retries"] = retries + 1
+            entry["queued_at"] = now  # reset timer on new attempt
             remaining.append(entry)
 
     save_queue(remaining)
