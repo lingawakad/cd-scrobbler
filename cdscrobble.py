@@ -608,7 +608,8 @@ def cmd_history(args, cfg: _Config):
                 token = _get_lb_token_from_file()
             except LookupError as e:
                 print(f"ListenBrainz: {e}", file=sys.stderr)
-        else:
+                token = None
+        if token:
             _print_lb_history(token, cfg.listenbrainz_username, args.count)
 
     if service in ("both", "lastfm"):

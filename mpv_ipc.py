@@ -127,20 +127,14 @@ def mpv_events(sock_path: str, event_timeout: float = 2.0):
         raise ConnectionError(f"Cannot connect to mpv at {sock_path}")
 
     try:
-        # Wake mpv so it sends initial events and starts the stream.
+        # Wake mpv so it starts the event stream.
         try:
             s.sendall(b'{"command": ["get_property", "time-pos"]}\n')
-            # Drain the probe response (may not arrive, that's ok).
-            try:
-                while True:
-                    try:
-                        s.recv(4096)
-                    except socket.timeout:
-                        break
-            except Exception:
-                pass
         except Exception:
             pass
+        # Don't drain the socket — initial probe response and early events
+        # are consumed by the event loop below (probe response has no
+        # "event" key so it's silently skipped).
 
         s.settimeout(event_timeout)
         decoder = json.JSONDecoder()
