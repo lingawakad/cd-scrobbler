@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import pylast
+import requests
 
-from config import get_lastfm_api_key, get_lastfm_api_secret, get_lastfm_session_key
+from config import (
+    get_lastfm_api_key,
+    get_lastfm_api_secret,
+    get_lastfm_session_key,
+    get_lastfm_username,
+)
 
 
 def _get_network(config: dict | None = None) -> pylast.LastFMNetwork:
@@ -66,21 +72,42 @@ def get_recent_tracks(
     limit: int = 25,
     config: dict | None = None,
 ) -> list[dict]:
-    """Fetch recent scrobbles from Last.fm."""
-    net = _get_network(config)
-    try:
-        user = net.get_user()
-    except TypeError:
-        # pylast 7.x fallback — get_user may require username
-        user = net.get_user(username=net.username)
-    tracks = user.get_recent_tracks(limit=limit)
+    """Fetch recent scrobbles from Last.fm via the XML API (avoids pylast 7.x issues)."""
+    import urllib.parse
 
+    if config is None:
+        config = {}
+    username = get_lastfm_username(config)
+    api_key = get_lastfm_api_key(config)
+    api_secret = get_lastfm_api_secret(config)
+    session_key = get_lastfm_session_key(config)
+
+    if not all([username, api_key, session_key]):
+        raise LookupError(
+            "Last.fm credentials not configured (need username, api_key + session_key)"
+        )
+
+    url = "https://ws.audioscrobbler.com/2.0/"
+    params = {
+        "method": "user.getrecenttracks",
+        "user": username,
+        "api_key": api_key,
+        "sk": session_key,
+        "limit": limit,
+        "format": "json",
+    }
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    tracks = data.get("recenttracks", {}).get("track", [])
     results = []
     for t in tracks:
+        album = t.get("album", "")
         results.append({
-            "artist": str(t.artist),
-            "title": str(t.title),
-            "album": str(t.album) if t.album else "",
-            "timestamp": int(t.timestamp),
+            "artist": t["artist"]["#text"],
+            "title": t["name"],
+            "album": album.get("#text", "") if isinstance(album, dict) else album,
+            "timestamp": int(t.get("@date", {}).get("uts", 0)),
         })
     return results

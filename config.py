@@ -16,6 +16,7 @@ DEFAULTS = {
     "lastfm_api_key": "",
     "lastfm_api_secret": "",
     "lastfm_session_key": "",
+    "lastfm_username": "",
 }
 
 
@@ -107,6 +108,13 @@ def get_lastfm_session_key(config: dict | None = None) -> str | None:
     if config is None:
         config = load_config()
     return config.get("lastfm_session_key", "").strip() or None
+
+
+def get_lastfm_username(config: dict | None = None) -> str | None:
+    """Return the configured Last.fm username, or None."""
+    if config is None:
+        config = load_config()
+    return config.get("lastfm_username", "").strip() or None
 
 
 def lastfm_enabled(config: dict) -> bool:
