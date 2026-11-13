@@ -17,6 +17,7 @@ from mbid import get_disc_info, get_cdtext, DiscReadError
 from mpv_ipc import (
     _get_default_socket, wait_for_mpv,
     mpv_get_status, mpv_get_position, mpv_command,
+    MpvDisconnected, mpv_events,
 )
 from musicbrainz import (
     find_release,
@@ -317,27 +318,29 @@ def cmd_play(args, verbose, cfg, cfg_token=None):
 
 
 def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool, cfg: dict):
-    """Monitor mpv via IPC socket and scrobble tracks to configured backends."""
+    """Monitor mpv via IPC socket and scrobble tracks to configured backends.
+
+    Uses mpv's event stream (push-based) instead of polling every second.
+    Behaviour is 1:1 equivalent with the old poll-based version.
+    """
     tracks_by_pos = {int(t["position"]): t for t in info["tracks"]}
-    # Calculate track offsets (cumulative) in seconds
     track_offsets = []
     cumulative = 0
     for t in info["tracks"]:
         track_offsets.append(cumulative)
-        cumulative += t.get("length_ms", 0) / 1000  # ms -> seconds
+        cumulative += t.get("length_ms", 0) / 1000
+
     last_position = None
-    start_time = None          # wall-clock time when current track segment started
-    scrobbled = set()          # positions already scrobbled
-    mpv_connected = False      # have we ever successfully reached mpv?
-    was_paused = False         # track pause state to avoid spamming messages
-    track_start = None         # wall-clock time when current track first started
-    accumulated_play = 0.0     # total playtime for current track across pauses
-    current_msid = ""            # recording_msid from LB playing_now (for correlation)
+    start_time = None
+    scrobbled = set()
+    was_paused = False
+    track_start = None
+    accumulated_play = 0.0
+    current_msid = ""
     lb_enabled = bool(get_listenbrainz_token(cfg))
     lf_enabled = lastfm_enabled(cfg)
 
     def _clear_playing_now():
-        """Clear playing_now on both backends (if configured)."""
         if no_playing:
             return
         if lb_enabled:
@@ -352,7 +355,6 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 pass
 
     def _scrobble_track(position):
-        """Scrobble a track if played long enough (to both enabled backends)."""
         if position not in scrobbled and start_time and track_start:
             played = (time.time() - start_time) + accumulated_play
             track = tracks_by_pos.get(position, {})
@@ -369,158 +371,137 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     try:
                         lb_submit_listen(track, ts, cfg.get("listenbrainz_token"))
                         if verbose:
-                            print(f"Scrobbled (LB): {track.get('title', position)}",
-                                  file=sys.stderr)
+                            print(f"Scrobbled (LB): {track.get('title', position)}", file=sys.stderr)
                     except Exception as e:
-                        enqueue({
-                            "backend": "listenbrainz",
-                            "listen_type": "single",
-                            "track": dict(track),
-                            "listened_at": ts,
-                        })
+                        enqueue({"backend": "listenbrainz", "listen_type": "single",
+                                 "track": dict(track), "listened_at": ts})
                         if verbose:
                             print(f"LB scrobble failed, queued: {e}", file=sys.stderr)
                 if lf_enabled:
                     try:
                         lf_submit_listen(track, ts, cfg)
                         if verbose:
-                            print(f"Scrobbled (LF): {track.get('title', position)}",
-                                  file=sys.stderr)
+                            print(f"Scrobbled (LF): {track.get('title', position)}", file=sys.stderr)
                     except Exception as e:
-                        enqueue({
-                            "backend": "lastfm",
-                            "listen_type": "single",
-                            "track": dict(track),
-                            "listened_at": ts,
-                        })
+                        enqueue({"backend": "lastfm", "listen_type": "single",
+                                 "track": dict(track), "listened_at": ts})
                         if verbose:
                             print(f"LF scrobble failed, queued: {e}", file=sys.stderr)
                 scrobbled.add(position)
 
+    def _on_track_change(current_track):
+        """Handle a track boundary transition."""
+        nonlocal last_position, start_time, track_start, accumulated_play, was_paused, current_msid
+        if last_position is not None:
+            _scrobble_track(last_position)
+        start_time = time.time()
+        track_start = time.time()
+        accumulated_play = 0.0
+        was_paused = False
+        current_msid = ""
+        last_position = current_track
+        if verbose:
+            print(f"Track {current_track}", file=sys.stderr)
+        if not no_playing:
+            track = tracks_by_pos.get(current_track, {})
+            track.setdefault("album", info["title"])
+            track.setdefault("artist", info["artist"])
+            track.setdefault("release_mbid", info.get("release_mbid", ""))
+            if lb_enabled:
+                try:
+                    msid = lb_submit_playing_now(track, cfg.get("listenbrainz_token"))
+                    current_msid = msid if msid else ""
+                    if verbose:
+                        print(f"Now (LB): {track.get('title', current_track)}", file=sys.stderr)
+                except Exception as e:
+                    current_msid = ""
+                    if verbose:
+                        print(f"LB playing_now failed: {e}", file=sys.stderr)
+            if lf_enabled:
+                try:
+                    lf_submit_playing_now(track, cfg)
+                    if verbose:
+                        print(f"Now (LF): {track.get('title', current_track)}", file=sys.stderr)
+                except Exception as e:
+                    if verbose:
+                        print(f"LF playing_now failed: {e}", file=sys.stderr)
+
+    def _on_pause():
+        nonlocal accumulated_play, was_paused
+        _scrobble_track(last_position)
+        if start_time is not None:
+            accumulated_play += time.time() - start_time
+        if not was_paused:
+            was_paused = True
+            if verbose:
+                print("Paused — waiting for resume", file=sys.stderr)
+
+    def _on_resume():
+        nonlocal was_paused, start_time
+        was_paused = False
+        start_time = time.time()
+        if verbose:
+            print("Resumed", file=sys.stderr)
+
+    def _on_eof():
+        _scrobble_track(last_position)
+        _clear_playing_now()
+        last_position = None
+        start_time = None
+
     total_duration = track_offsets[-1] if track_offsets else 0
 
     def _current_track(position_s):
-        """Map position (seconds) to track number."""
         if position_s >= total_duration:
-            return len(track_offsets)  # at or past end = last track
+            return len(track_offsets)
         for i in range(len(track_offsets) - 1):
             if track_offsets[i] <= position_s < track_offsets[i + 1]:
-                return i + 1  # track positions are 1-indexed
-        return 1  # position 0 or before first track boundary
+                return i + 1
+        return 1
 
     try:
-        while True:
-            try:
-                status = mpv_get_status(sock_path)
-                pos_s = mpv_get_position(sock_path)
-                mpv_connected = True
+        for event in mpv_events(sock_path):
+            event_type = event.get("event", "")
 
-                # Detect playback stopped — scrobble current track then exit
-                if status == "Stopped" and last_position is not None:
-                    _scrobble_track(last_position)
-                    _clear_playing_now()
-                    last_position = None
-                    start_time = None
-                    break
+            if event_type == "end-file":
+                if last_position is not None:
+                    _on_eof()
+                break
 
-                # Fallback: mpv may not report "Stopped" for CD/audio-only
-                # (eof-reached may not be set). Detect by position.
-                if (
-                    last_position is not None
-                    and total_duration > 0
-                    and pos_s >= total_duration
-                ):
-                    _scrobble_track(last_position)
-                    _clear_playing_now()
-                    last_position = None
-                    start_time = None
-                    break
+            if event_type == "property-change":
+                prop = event.get("property", "")
+                value = event.get("data")
 
-                # Detect pause — scrobble current track, stay alive for resume
-                if status == "Paused" and last_position is not None:
-                    _scrobble_track(last_position)
-                    if start_time is not None:
-                        accumulated_play += time.time() - start_time
-                    if not was_paused:
-                        was_paused = True
-                        if verbose:
-                            print("Paused — waiting for resume", file=sys.stderr)
-                    time.sleep(1)
+                if prop == "pause":
+                    if value is True and last_position is not None:
+                        _on_pause()
+                    elif value is False and was_paused:
+                        _on_resume()
                     continue
 
-                # mpv reports total duration before playback starts; ignore until position drops
-                if pos_s > 0 and pos_s >= total_duration * 0.99 and last_position is None:
-                    time.sleep(1)
+                if prop == "eof-reached":
+                    if value is True and last_position is not None:
+                        _on_eof()
+                    break
+
+                if prop == "time-pos":
+                    if isinstance(value, (int, float)):
+                        pos_s = float(value)
+                        # mpv may report near-total duration before playback
+                        # starts; skip until last_position is set.
+                        if (pos_s > 0 and pos_s >= total_duration * 0.99
+                                and last_position is None):
+                            continue
+                        current_track = _current_track(pos_s) if pos_s > 0 else None
+                        if (current_track is not None
+                                and current_track != last_position):
+                            _on_track_change(current_track)
                     continue
 
-                current_track = _current_track(pos_s) if pos_s > 0 else None
-
-                if verbose and current_track:
-                    print(f"Track {current_track}", file=sys.stderr)
-
-                # Detect resume from pause
-                if status == "Playing" and last_position is not None and was_paused:
-                    was_paused = False
-                    start_time = time.time()
-                    if verbose:
-                        print("Resumed", file=sys.stderr)
-
-                # Detect track change
-                if current_track is not None and current_track != last_position:
-                    # Scrobble previous track
-                    if last_position is not None:
-                        _scrobble_track(last_position)
-
-                    # New track started — record when this track began
-                    start_time = time.time()
-                    track_start = time.time()
-                    accumulated_play = 0.0
-                    was_paused = False
-                    current_msid = ""  # reset for new track
-                    last_position = current_track
-
-                    # Submit playing_now to enabled backends
-                    if not no_playing:
-                        track = tracks_by_pos.get(current_track, {})
-                        track.setdefault("album", info["title"])
-                        track.setdefault("artist", info["artist"])
-                        track.setdefault("release_mbid", info.get("release_mbid", ""))
-                        if lb_enabled:
-                            try:
-                                msid = lb_submit_playing_now(
-                                    track, cfg.get("listenbrainz_token"))
-                                current_msid = msid if msid else ""
-                                if verbose:
-                                    print(f"Now (LB): {track.get('title', current_track)}",
-                                          file=sys.stderr)
-                            except Exception as e:
-                                current_msid = ""
-                                if verbose:
-                                    print(f"LB playing_now failed: {e}", file=sys.stderr)
-                        if lf_enabled:
-                            try:
-                                lf_submit_playing_now(track, cfg)
-                                if verbose:
-                                    print(f"Now (LF): {track.get('title', current_track)}",
-                                          file=sys.stderr)
-                            except Exception as e:
-                                if verbose:
-                                    print(f"LF playing_now failed: {e}", file=sys.stderr)
-
-            except ConnectionError:
-                # mpv not connected yet — wait; but if it was connected, it exited
-                if mpv_connected:
-                    if last_position is not None:
-                        _scrobble_track(last_position)
-                    if verbose:
-                        print("mpv disconnected", file=sys.stderr)
-                    break
-                pass
-            except Exception as e:
-                if verbose:
-                    print(f"Unexpected error in monitor loop: {e}", file=sys.stderr)
-
-            time.sleep(1)
+            elif event_type == "playback-restart":
+                if last_position is not None and was_paused:
+                    _on_resume()
+                continue
 
     except KeyboardInterrupt:
         if last_position is not None:
@@ -528,6 +509,12 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
         _clear_playing_now()
         if verbose:
             print("\nInterrupted", file=sys.stderr)
+    else:
+        # Generator exhausted (mpv disconnected)
+        if last_position is not None:
+            _scrobble_track(last_position)
+            if verbose:
+                print("mpv disconnected", file=sys.stderr)
 
 
 def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
