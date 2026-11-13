@@ -23,6 +23,9 @@ from musicbrainz import (
     find_release_by_search,
     search_releases,
     get_release_info,
+    _load_cache,
+    _get_cached,
+    _set_cached,
 )
 from listenbrainz import submit_listen as lb_submit_listen, submit_playing_now as lb_submit_playing_now, clear_playing_now as lb_clear_playing_now
 from lastfm import submit_listen as lf_submit_listen, submit_playing_now as lf_submit_playing_now, clear_playing_now as lf_clear_playing_now
@@ -170,7 +173,6 @@ def _submit_queued(entry: dict, config: dict) -> None:
 def cmd_lookup(args, verbose, cfg):
     """Identify CD and print metadata."""
     from mbid import find_cd_drive
-    from musicbrainz import _load_cache, _get_cached, _set_cached
 
     device = args.device or get_device(cfg) or find_cd_drive()
     if verbose:
@@ -225,8 +227,7 @@ def cmd_lookup(args, verbose, cfg):
 
 def cmd_play(args, verbose, cfg, cfg_token=None):
     """Identify CD, start playback via mpv, scrobble tracks."""
-    from mbid import DiscReadError, find_cd_drive
-    from musicbrainz import _load_cache, _get_cached, _set_cached
+    from mbid import find_cd_drive
 
     device = args.device or get_device(cfg) or find_cd_drive()
     if verbose:
@@ -553,8 +554,7 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
 
 def cmd_cache(args, verbose, cfg):
     """Read disc ID and cache it against a user-provided release MBID."""
-    from mbid import DiscReadError, find_cd_drive
-    from musicbrainz import _load_cache, _get_cached, _set_cached
+    from mbid import find_cd_drive
 
     # Accept full MusicBrainz URL or raw MBID
     mbid = args.release_mbid
@@ -595,7 +595,7 @@ def cmd_cache(args, verbose, cfg):
 
 def cmd_history(args, cfg):
     """Show recent scrobbles from configured backends."""
-    service = args.service.lower() if hasattr(args, 'service') else "both"
+    service = args.service.lower()
 
     if service in ("both", "listenbrainz"):
         try:
@@ -629,14 +629,14 @@ def _get_lb_token_from_file():
     from listenbrainz import TOKEN_FILE
     try:
         raw = TOKEN_FILE.read_text().strip()
-        if "=" in raw:
-            return raw.split("=", 1)[1].strip()
-        return raw
     except FileNotFoundError:
         raise LookupError(
             f"ListenBrainz token not found at {TOKEN_FILE} — "
             "put it in ~/.config/cd-scrobbler/config as listenbrainz_token="
         )
+    if "=" in raw:
+        return raw.split("=", 1)[1].strip()
+    return raw
 
 
 def _print_lb_history(token, username, count):
@@ -755,7 +755,6 @@ def _lookup_by_cdtext(device, verbose=False):
         print(f"CD-Text: {query}", file=sys.stderr)
 
     # Check cache for CD-Text -> release MBID
-    from musicbrainz import _load_cache, _get_cached, _set_cached
     cache = _load_cache()
     ct_key = f"cdtext:{query}:{len(cdtext['tracks'])}"
     cached_mbid = _get_cached(ct_key, cache)

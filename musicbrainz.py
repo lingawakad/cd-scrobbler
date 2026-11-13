@@ -45,7 +45,7 @@ def _set_cached(key: str, value, cache: dict) -> None:
 
 
 def _init():
-    musicbrainzngs.set_useragent("cd-scrobbler", "0.3", "recent8571@proton.me")
+    musicbrainzngs.set_useragent("cd-scrobbler", "0.5", "recent8571@proton.me")
 
 
 def find_releases(disc_id: str, toc: str | None = None) -> list[dict]:

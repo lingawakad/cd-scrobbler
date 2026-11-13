@@ -1,20 +1,63 @@
 """ListenBrainz: submit listened tracks."""
 
 import socket
+import urllib3
 from pathlib import Path
 
 import requests
 
-# Force IPv4 to avoid sporadic IPv6 connectivity issues.
-_original_getaddrinfo = socket.getaddrinfo
-def _ipv4_only_getaddrinfo(*args, **kwargs):
-    return [r for r in _original_getaddrinfo(*args, **kwargs)
-            if r[0] == socket.AF_INET]
-socket.getaddrinfo = _ipv4_only_getaddrinfo
+
+# IPv4-only transport — avoids sporadic IPv6 resolution failures without
+# monkey-patching the global socket module.
+class _IPv4ConnectionPool(urllib3.HTTPSConnectionPool):
+    """HTTPSConnectionPool that forces AF_INET DNS resolution."""
+    def _new_conn(self):
+        import urllib3.connection
+        # Force AF_INET by resolving hostname ourselves
+        infos = socket.getaddrinfo(self.host, self.port, socket.AF_INET)
+        if infos:
+            family, _, _, _, sockaddr = infos[0]
+            return urllib3.connection.HTTPSConnection(
+                self.host, self.port, timeout=self.timeout,
+                source_address=sockaddr, assert_hostname=False,
+            )
+        raise urllib3.exceptions.MaxRetryError(
+            urllib3.HTTPConnectionPool(self.host, self.port),
+            f"Cannot resolve {self.host} to IPv4",
+        )
+
+
+class _IPv4HTTPAdapter(requests.adapters.HTTPAdapter):
+    """Transport adapter for IPv4-only ListenBrainz API connections."""
+    def init_poolmanager(self, *args, **kwargs):
+        timeout = kwargs.pop("timeout", 10)
+        if isinstance(timeout, int):
+            timeout = urllib3.util.Timeout(connect=timeout, read=timeout)
+        self.poolmanager = _IPv4ConnectionPool(
+            "api.listenbrainz.org",
+            maxsize=kwargs.pop("maxsize", 10),
+            block=kwargs.pop("block", False),
+            timeout=timeout,
+        )
+
+
+# Session-scoped to api.listenbrainz.org with IPv4-only resolution.
+_API_SESSION: requests.Session | None = None
+
+
+def _get_api_session() -> requests.Session:
+    """Lazy-initialized session for ListenBrainz API (IPv4 only)."""
+    global _API_SESSION
+    if _API_SESSION is None:
+        _API_SESSION = requests.Session()
+        _API_SESSION.headers["User-Agent"] = USER_AGENT
+        _API_SESSION.mount("https://api.listenbrainz.org/", _IPv4HTTPAdapter())
+    return _API_SESSION
+
 
 API_URL = "https://api.listenbrainz.org/1/submit-listens"
 TOKEN_FILE = Path.home() / ".lbtoken"
-USER_AGENT = "cd-scrobbler/0.3.0 (recent8571@proton.me)"
+USER_AGENT = "cd-scrobbler/0.5.0 (recent8571@proton.me)"
 
 
 def _get_token(config_token: str | None = None) -> str:
@@ -65,10 +108,10 @@ def submit_listen(track: dict, listened_at: int, config_token: str | None = None
         "track_metadata": metadata,
     }]
 
-    resp = requests.post(
+    resp = _get_api_session().post(
         API_URL,
         json={"listen_type": "single", "payload": payload},
-        headers={"Authorization": f"Token {token}", "User-Agent": USER_AGENT},
+        headers={"Authorization": f"Token {token}"},
         timeout=10,
     )
     resp.raise_for_status()
@@ -89,10 +132,10 @@ def submit_playing_now(track: dict, config_token: str | None = None) -> str:
     if track.get("recording_mbid"):
         payload[0]["track_metadata"]["recording_mbid"] = track["recording_mbid"]
 
-    resp = requests.post(
+    resp = _get_api_session().post(
         API_URL,
         json={"listen_type": "playing_now", "payload": payload},
-        headers={"Authorization": f"Token {token}", "User-Agent": USER_AGENT},
+        headers={"Authorization": f"Token {token}"},
         params={"return_msid": "true"},
         timeout=10,
     )
@@ -105,10 +148,10 @@ def clear_playing_now(config_token: str | None = None) -> None:
     """Clear the playing_now notification by submitting an empty payload."""
     token = _get_token(config_token)
 
-    resp = requests.post(
+    resp = _get_api_session().post(
         API_URL,
         json={"listen_type": "playing_now", "payload": []},
-        headers={"Authorization": f"Token {token}", "User-Agent": USER_AGENT},
+        headers={"Authorization": f"Token {token}"},
         timeout=10,
     )
     resp.raise_for_status()
