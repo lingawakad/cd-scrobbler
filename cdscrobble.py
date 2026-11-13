@@ -627,7 +627,7 @@ def cmd_history(args, cfg):
         if lastfm_enabled(cfg):
             try:
                 import lastfm as lastfm_mod
-                tracks = lastfm_mod.get_recent_tracks(limit=args.count)
+                tracks = lastfm_mod.get_recent_tracks(limit=args.count, config=cfg)
             except Exception as e:
                 print(f"Last.fm: {e}", file=sys.stderr)
             else:
@@ -661,25 +661,38 @@ def _print_lb_history(token, count):
     """Fetch and display ListenBrainz history."""
     import requests
 
+    # ListenBrainz requires the actual username for the listens endpoint.
+    # Get it via the stats endpoint (me/username has been deprecated).
     try:
-        # ListenBrainz deprecated 1/me/username; use token-based fetch directly.
-        # The ~token/listens pattern is not reliable, so we use 1/me/listens
-        # which returns listens for the authenticated user without needing username.
         resp = requests.get(
-            "https://api.listenbrainz.org/1/me/listens",
+            "https://api.listenbrainz.org/1/me/stats/all-time",
+            headers={"Authorization": f"Token {token}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        username = resp.json()["payload"]["user_name"]
+    except Exception as e:
+        print(
+            f"ListenBrainz: unable to resolve username from token "
+            f"(token may be invalid or expired): {e}",
+            file=sys.stderr,
+        )
+        return
+
+    try:
+        resp = requests.get(
+            f"https://api.listenbrainz.org/1/user/{username}/listens",
             params={"count": count},
             headers={"Authorization": f"Token {token}"},
             timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
-        # API returns {"payload": {"listens": [...]}} or may omit "payload" on empty
-        listens = data.get("payload", {}).get("listens", data.get("listens", []))
     except Exception as e:
         print(f"ListenBrainz: error fetching history: {e}", file=sys.stderr)
         return
 
-    listens = data.get("payload", [])
+    listens = data.get("payload", {}).get("listens", [])
     if not listens:
         print("ListenBrainz: No recent scrobbles found.")
         return
