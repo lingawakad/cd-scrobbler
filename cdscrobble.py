@@ -9,9 +9,9 @@ import time
 from pathlib import Path
 
 from config import (
-    load_config, save_config, get_device, is_verbose, get_mpv_socket,
-    no_playing_now, get_listenbrainz_token, get_listenbrainz_username,
-    get_lastfm_api_key, get_lastfm_api_secret, get_lastfm_session_key, lastfm_enabled,
+    _Config,
+    load_config,
+    save_config,
 )
 from mbid import get_disc_info, get_cdtext, DiscReadError
 from mpv_ipc import (
@@ -48,7 +48,7 @@ def _print_tracks(info: dict) -> None:
 
 
 def main():
-    cfg = load_config()
+    cfg = _Config()
 
     parser = argparse.ArgumentParser(
         description="Scrobble CD playback to ListenBrainz",
@@ -115,9 +115,9 @@ def main():
     args = parser.parse_args()
 
     # Merge CLI args with config: CLI takes precedence
-    verbose = args.verbose or is_verbose(cfg)
+    verbose = args.verbose or cfg.verbose
 
-    cfg_token = get_listenbrainz_token(cfg)
+    cfg_token = cfg.listenbrainz_token
 
     # Flush any pending queue entries at startup
     if hasattr(args, 'command') and args.command != "queue":
@@ -150,8 +150,9 @@ def main():
         sys.exit(1)
 
 
-def _submit_queued(entry: dict, config: dict) -> None:
+def _submit_queued(entry: dict, config: _Config | dict) -> None:
     """Submit a queued scrobble entry to the appropriate backend."""
+    cfg = _Config() if isinstance(config, dict) else config
     backend = entry.get("backend", "listenbrainz")
     track = entry["track"]
     listened_at = entry.get("listened_at")
@@ -160,7 +161,7 @@ def _submit_queued(entry: dict, config: dict) -> None:
         if backend == "lastfm":
             lf_submit_playing_now(track, config)
         else:
-            lb_submit_playing_now(track, config.get("listenbrainz_token"))
+            lb_submit_playing_now(track, cfg.listenbrainz_token)
         return
 
     if listened_at is None:
@@ -169,14 +170,14 @@ def _submit_queued(entry: dict, config: dict) -> None:
     if backend == "lastfm":
         lf_submit_listen(track, listened_at, config)
     else:
-        lb_submit_listen(track, listened_at, config.get("listenbrainz_token"))
+        lb_submit_listen(track, listened_at, cfg.listenbrainz_token)
 
 
-def cmd_lookup(args, verbose, cfg):
+def cmd_lookup(args, verbose, cfg: _Config):
     """Identify CD and print metadata."""
     from mbid import find_cd_drive
 
-    device = args.device or get_device(cfg) or find_cd_drive()
+    device = args.device or cfg.device or find_cd_drive()
     if verbose:
         print(f"Device: {device}", file=sys.stderr)
 
@@ -230,11 +231,11 @@ def cmd_lookup(args, verbose, cfg):
     _flush_cache(_load_cache())
 
 
-def cmd_play(args, verbose, cfg, cfg_token=None):
+def cmd_play(args, verbose, cfg: _Config):
     """Identify CD, start playback via mpv, scrobble tracks."""
     from mbid import find_cd_drive
 
-    device = args.device or get_device(cfg) or find_cd_drive()
+    device = args.device or cfg.device or find_cd_drive()
     if verbose:
         print(f"Device: {device}", file=sys.stderr)
 
@@ -288,11 +289,11 @@ def cmd_play(args, verbose, cfg, cfg_token=None):
             print(f"Tracks: {len(info['tracks'])}", file=sys.stderr)
 
     # Determine socket path
-    sock_path = args.socket or get_mpv_socket(cfg) or _get_default_socket()
+    sock_path = args.socket or cfg.mpv_socket or _get_default_socket()
     if verbose:
         print(f"mpv socket: {sock_path}", file=sys.stderr)
 
-    no_playing = args.no_playing_now or no_playing_now(cfg)
+    no_playing = args.no_playing_now or cfg.no_playing_now
 
     # Ensure parent directory exists for the IPC socket
     Path(sock_path).parent.mkdir(parents=True, exist_ok=True)
@@ -317,7 +318,7 @@ def cmd_play(args, verbose, cfg, cfg_token=None):
     return
 
 
-def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool, cfg: dict):
+def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool, cfg: _Config):
     """Monitor mpv via IPC socket and scrobble tracks to configured backends.
 
     Uses mpv's event stream (push-based) instead of polling every second.
@@ -337,15 +338,15 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     track_start = None
     accumulated_play = 0.0
     current_msid = ""
-    lb_enabled = bool(get_listenbrainz_token(cfg))
-    lf_enabled = lastfm_enabled(cfg)
+    lb_enabled = bool(cfg.listenbrainz_token)
+    lf_enabled = cfg.lastfm_enabled
 
     def _clear_playing_now():
         if no_playing:
             return
         if lb_enabled:
             try:
-                lb_clear_playing_now(cfg.get("listenbrainz_token"))
+                lb_clear_playing_now(cfg.listenbrainz_token)
             except Exception:
                 pass
         if lf_enabled:
@@ -369,7 +370,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 ts = int(track_start)
                 if lb_enabled:
                     try:
-                        lb_submit_listen(track, ts, cfg.get("listenbrainz_token"))
+                        lb_submit_listen(track, ts, cfg.listenbrainz_token)
                         if verbose:
                             print(f"Scrobbled (LB): {track.get('title', position)}", file=sys.stderr)
                     except Exception as e:
@@ -409,7 +410,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
             track.setdefault("release_mbid", info.get("release_mbid", ""))
             if lb_enabled:
                 try:
-                    msid = lb_submit_playing_now(track, cfg.get("listenbrainz_token"))
+                    msid = lb_submit_playing_now(track, cfg.listenbrainz_token)
                     current_msid = msid if msid else ""
                     if verbose:
                         print(f"Now (LB): {track.get('title', current_track)}", file=sys.stderr)
@@ -552,7 +553,7 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
     os._exit(0)
 
 
-def cmd_cache(args, verbose, cfg):
+def cmd_cache(args, verbose, cfg: _Config):
     """Read disc ID and cache it against a user-provided release MBID."""
     from mbid import find_cd_drive
 
@@ -564,7 +565,7 @@ def cmd_cache(args, verbose, cfg):
         print(f"Error: invalid release MBID: {args.release_mbid}", file=sys.stderr)
         sys.exit(1)
 
-    device = args.device or get_device(cfg) or find_cd_drive()
+    device = args.device or cfg.device or find_cd_drive()
     if verbose:
         print(f"Device: {device}", file=sys.stderr)
 
@@ -596,20 +597,22 @@ def cmd_cache(args, verbose, cfg):
     _flush_cache(_load_cache())
 
 
-def cmd_history(args, cfg):
+def cmd_history(args, cfg: _Config):
     """Show recent scrobbles from configured backends."""
     service = args.service.lower()
 
     if service in ("both", "listenbrainz"):
-        try:
-            token = get_listenbrainz_token(cfg) or _get_lb_token_from_file()
-        except LookupError as e:
-            print(f"ListenBrainz: {e}", file=sys.stderr)
+        token = cfg.listenbrainz_token
+        if not token:
+            try:
+                token = _get_lb_token_from_file()
+            except LookupError as e:
+                print(f"ListenBrainz: {e}", file=sys.stderr)
         else:
-            _print_lb_history(token, get_listenbrainz_username(cfg), args.count)
+            _print_lb_history(token, cfg.listenbrainz_username, args.count)
 
     if service in ("both", "lastfm"):
-        if lastfm_enabled(cfg):
+        if cfg.lastfm_enabled:
             try:
                 import lastfm as lastfm_mod
                 tracks = lastfm_mod.get_recent_tracks(limit=args.count, config=cfg)
@@ -724,9 +727,9 @@ def cmd_queue(args, verbose, cfg):
             print("Queue is now empty")
 
 
-def cmd_control(args, cfg):
+def cmd_control(args, cfg: _Config):
     """Control mpv playback via IPC."""
-    sock_path = args.socket or get_mpv_socket(cfg) or _get_default_socket()
+    sock_path = args.socket or cfg.mpv_socket or _get_default_socket()
 
     try:
         if args.action == "pause":
@@ -803,7 +806,7 @@ def cmd_lastfm(args, cfg, verbose=False):
         _lastfm_set_key(args.session_key, cfg)
 
 
-def _lastfm_mobile_login(cfg, verbose=False):
+def _lastfm_mobile_login(cfg: _Config, verbose: bool = False):
     """Authenticate via pylast mobile auth flow. No browser needed."""
     try:
         import pylast
@@ -812,8 +815,8 @@ def _lastfm_mobile_login(cfg, verbose=False):
               file=sys.stderr)
         sys.exit(1)
 
-    api_key = get_lastfm_api_key(cfg)
-    api_secret = get_lastfm_api_secret(cfg)
+    api_key = cfg.lastfm_api_key
+    api_secret = cfg.lastfm_api_secret
     if not api_key:
         print("Error: lastfm_api_key not set in config.", file=sys.stderr)
         print("Add it to ~/.config/cd-scrobbler/config:\n", file=sys.stderr)
@@ -857,11 +860,11 @@ def _lastfm_mobile_login(cfg, verbose=False):
         sys.exit(1)
 
 
-def _lastfm_set_key(session_key: str, cfg: dict):
+def _lastfm_set_key(session_key: str, cfg: _Config):
     """Save a Last.fm session key to config."""
     save_config({"lastfm_session_key": session_key.strip()})
     # Verify it works
-    api_key = get_lastfm_api_key(cfg)
+    api_key = cfg.lastfm_api_key
     if not api_key:
         print("Warning: no API key configured. Scrobbles will fail.",
               file=sys.stderr)
