@@ -68,7 +68,11 @@ def get_recent_tracks(
 ) -> list[dict]:
     """Fetch recent scrobbles from Last.fm."""
     net = _get_network(config)
-    user = net.get_user(username=net.username)
+    try:
+        user = net.get_user()
+    except TypeError:
+        # pylast 7.x fallback — get_user may require username
+        user = net.get_user(username=net.username)
     tracks = user.get_recent_tracks(limit=limit)
 
     results = []
