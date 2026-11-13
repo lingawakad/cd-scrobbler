@@ -10,7 +10,7 @@ from pathlib import Path
 
 from config import (
     load_config, save_config, get_device, is_verbose, get_mpv_socket,
-    no_playing_now, get_listenbrainz_token,
+    no_playing_now, get_listenbrainz_token, get_listenbrainz_username,
     get_lastfm_api_key, get_lastfm_api_secret, get_lastfm_session_key, lastfm_enabled,
 )
 from mbid import get_disc_info, get_cdtext, DiscReadError
@@ -621,7 +621,7 @@ def cmd_history(args, cfg):
         except LookupError as e:
             print(f"ListenBrainz: {e}", file=sys.stderr)
         else:
-            _print_lb_history(token, args.count)
+            _print_lb_history(token, get_listenbrainz_username(cfg), args.count)
 
     if service in ("both", "lastfm"):
         if lastfm_enabled(cfg):
@@ -657,24 +657,15 @@ def _get_lb_token_from_file():
         )
 
 
-def _print_lb_history(token, count):
+def _print_lb_history(token, username, count):
     """Fetch and display ListenBrainz history."""
     import requests
 
-    # ListenBrainz requires the actual username for the listens endpoint.
-    # Get it via the stats endpoint (me/username has been deprecated).
-    try:
-        resp = requests.get(
-            "https://api.listenbrainz.org/1/me/stats/all-time",
-            headers={"Authorization": f"Token {token}"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        username = resp.json()["payload"]["user_name"]
-    except Exception as e:
+    if not username:
         print(
-            f"ListenBrainz: unable to resolve username from token "
-            f"(token may be invalid or expired): {e}",
+            "ListenBrainz: username not configured. "
+            "Add listenbrainz_username to ~/.config/cd-scrobbler/config "
+            "(your username from listenbrainz.org).",
             file=sys.stderr,
         )
         return
