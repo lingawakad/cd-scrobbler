@@ -62,6 +62,21 @@ def _flush_cache(cache: dict) -> None:
 
 def _init():
     musicbrainzngs.set_useragent("cd-scrobbler", "0.5", "recent8571@proton.me")
+    musicbrainzngs.set_rate_limit(True)  # prevent hammering
+
+
+_MB_TIMEOUT = 15  # seconds
+
+
+def _do_mb_call(fn, *args, **kwargs):
+    """Call a musicbrainzngs function with a hard network timeout."""
+    import socket
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(_MB_TIMEOUT)
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 
 def find_releases(disc_id: str, toc: str | None = None) -> list[dict]:
@@ -81,8 +96,7 @@ def find_releases(disc_id: str, toc: str | None = None) -> list[dict]:
         return cached
 
     _init()
-    result = musicbrainzngs.get_releases_by_discid(
-        disc_id, toc=toc, includes=["artists", "recordings"])
+    result = _do_mb_call(musicbrainzngs.get_releases_by_discid, disc_id, toc=toc, includes=["artists", "recordings"])
 
     if "disc" in result:
         releases = result["disc"].get("release-list", [])
@@ -224,8 +238,7 @@ def get_release_info(release_mbid: str) -> dict:
         return cached
 
     _init()
-    data = musicbrainzngs.get_release_by_id(
-        release_mbid, includes=["recordings", "artists", "artist-credits"])
+    data = _do_mb_call(musicbrainzngs.get_release_by_id, release_mbid, includes=["recordings", "artists", "artist-credits"])
     release = data.get("release")
     if not release:
         raise LookupError(f"No release found for MBID {release_mbid}")
@@ -287,7 +300,7 @@ def search_releases(query: str, limit: int = 5) -> list[dict]:
         return cached
 
     _init()
-    result = musicbrainzngs.search_releases(query=query, limit=limit)
+    result = _do_mb_call(musicbrainzngs.search_releases, query=query, limit=limit)
 
     releases_list = [
         {
