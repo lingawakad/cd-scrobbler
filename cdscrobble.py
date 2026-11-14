@@ -558,14 +558,40 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
     os.close(devnull)
 
     os.makedirs(str(LOG_FILE.parent), exist_ok=True)
-    log_fd = os.open(str(LOG_FILE), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    log_fd = os.open(str(LOG_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     os.dup2(log_fd, 1)  # stdout -> log
     os.dup2(log_fd, 2)  # stderr -> log
-    os.close(log_fd)
+    # Don't close log_fd — the write() in except needs it
 
-    # Re-run monitor in the background child
-    _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg)
-    os._exit(0)
+    try:
+        import socket
+
+        # Verify we can connect to mpv before proceeding
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(5.0)
+        s.connect(sock_path)
+        s.close()
+
+        _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg)
+        os._exit(0)
+    except SystemExit:
+        raise
+    except Exception as e:
+        # Write to a diagnostic file so we can see what happened
+        err_file = str(LOG_FILE.parent / "monitor.err")
+        try:
+            with open(err_file, "w") as f:
+                import traceback
+                f.write(f"Monitor child failed:\n{traceback.format_exc()}\n")
+        except OSError:
+            pass
+        # Write to the log fd (still open via dup2)
+        try:
+            msg = f"Monitor child failed: {type(e).__name__}: {e}\n"
+            os.write(log_fd, msg.encode())
+        except OSError:
+            pass
+        os._exit(1)
 
 
 def cmd_cache(args, verbose, cfg: _Config):
