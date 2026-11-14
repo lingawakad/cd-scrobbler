@@ -127,20 +127,14 @@ def mpv_events(sock_path: str, event_timeout: float = 2.0):
         raise ConnectionError(f"Cannot connect to mpv at {sock_path}")
 
     try:
-        # Wake mpv so it sends initial events and starts the stream.
+        # Wake mpv so it starts the event stream.
         try:
             s.sendall(b'{"command": ["get_property", "time-pos"]}\n')
-            # Drain the probe response (may not arrive, that's ok).
-            try:
-                while True:
-                    try:
-                        s.recv(4096)
-                    except socket.timeout:
-                        break
-            except Exception:
-                pass
         except Exception:
             pass
+        # Don't drain the socket — initial probe response and early events
+        # are consumed by the event loop below (probe response has no
+        # "event" key so it's silently skipped).
 
         s.settimeout(event_timeout)
         decoder = json.JSONDecoder()
@@ -155,24 +149,26 @@ def mpv_events(sock_path: str, event_timeout: float = 2.0):
                 # No new data — nothing to yield, loop back to recv
                 continue
 
-            # Decode any complete JSON objects from the buffer.
+            # Decode any complete JSON objects from the buffer,
+            # preserving partial objects across recv calls.
             text = buf.decode("utf-8", errors="replace")
-            buf = b""
-            i = 0
-            while i < len(text):
+            pos = 0
+            while pos < len(text):
                 # Skip whitespace / newlines between objects.
-                while i < len(text) and text[i] in (" ", "\n", "\r", "\t"):
-                    i += 1
-                if i >= len(text):
+                while pos < len(text) and text[pos] in (" ", "\n", "\r", "\t"):
+                    pos += 1
+                if pos >= len(text):
                     break
                 try:
-                    obj, end = decoder.raw_decode(text, i)
-                    i = end
-                    if isinstance(obj, dict) and "event" in obj:
+                    obj, end = decoder.raw_decode(text, pos)
+                    pos = end
+                    if isinstance(obj, dict) and obj.get("event"):
                         yield obj
-                    # else: probe response, skip
                 except json.JSONDecodeError:
-                    i += 1  # skip bad char, try next position
+                    pos += 1  # skip one byte, try again
+
+            # Keep unconsumed bytes (partial JSON) for the next recv.
+            buf = text[pos:].encode("utf-8")
 
     except MpvDisconnected:
         pass  # mpv died — caller sees no more events
