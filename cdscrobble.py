@@ -349,7 +349,10 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
 
     def _poller():
         while running[0]:
-            val = mpv_ipc.mpv_poll_timepos(sock_path, timeout=1)
+            try:
+                val = mpv_ipc.mpv_poll_timepos(sock_path, timeout=2)
+            except Exception:
+                val = -999.0
             polled_timepos[0] = val
             # Sleep in small increments so we can stop quickly
             for _ in range(20):
@@ -592,20 +595,22 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
 
             # Check polled time-pos (CDDA doesn't push property-change events)
             pos_s = polled_timepos[0]
-            if pos_s is not None and isinstance(pos_s, (int, float)):
+            if pos_s == -999.0:
+                if verbose:
+                    os.write(log_fd, b"[POLL-ERROR]\n")
+            elif pos_s is not None and isinstance(pos_s, (int, float)):
                 pos_s = float(pos_s)
+                if verbose:
+                    os.write(log_fd, b"[POLL: %.3f last=%s]\n" % (pos_s, last_position))
                 if (pos_s > 0 and pos_s >= total_duration * 0.99
                         and last_position is None):
                     pass  # skip early position
                 else:
                     current_track = _current_track(pos_s) if pos_s > 0 else None
+                    if verbose:
+                        os.write(log_fd, b"[TRACK: %s last=%s match=%s]\n" % (current_track, last_position, current_track != last_position))
                     if (current_track is not None
                             and current_track != last_position):
-                        if verbose:
-                            try:
-                                os.write(log_fd, b"[POLL-TRACK: %s last=%s pos=%.1f]\n" % (current_track, last_position, pos_s))
-                            except OSError:
-                                pass
                         _on_track_change(current_track)
 
         except KeyboardInterrupt:
