@@ -59,6 +59,19 @@ def mpv_get_property(sock_path: str, prop: str, timeout: float = 5):
     raise RuntimeError(f"mpv get_property({prop!r}) failed: {resp.get('error')}")
 
 
+def mpv_poll_timepos(sock_path: str, timeout: float = 2) -> float | None:
+    """Get current time-pos via a dedicated IPC socket call.
+    
+    Returns the position in seconds, or None on failure.
+    CDDA playback doesn't push property-change events, so this is used
+    for polling-based position tracking.
+    """
+    try:
+        return mpv_get_property(sock_path, "time-pos", timeout)
+    except (ConnectionError, RuntimeError, TypeError):
+        return None
+
+
 def mpv_command(sock_path: str, *args, timeout: float = 5) -> None:
     """Send a command to mpv (e.g. 'play', 'pause', 'stop', 'seek', 120)."""
     resp = _mpv_request(sock_path, list(args), timeout)
