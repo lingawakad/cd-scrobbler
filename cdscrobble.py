@@ -461,33 +461,41 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
         return 1
 
     try:
-        for event in mpv_events(sock_path):
-            event_type = event.get("event", "")
+        try:
+            for event in mpv_events(sock_path):
+                event_type = event.get("event", "")
 
-            if event_type == "end-file":
-                if last_position is not None:
-                    _on_eof()
-                break
-
-            if event_type == "property-change":
-                prop = event.get("property", "")
-                value = event.get("data")
-
-                if prop == "pause":
-                    if value is True and last_position is not None:
-                        _on_pause()
-                    elif value is False and was_paused:
-                        _on_resume()
-                    continue
-
-                if prop == "eof-reached":
-                    if value is True and last_position is not None:
+                if event_type == "end-file":
+                    if last_position is not None:
                         _on_eof()
                     break
 
-                if prop == "time-pos":
-                    if isinstance(value, (int, float)):
-                        pos_s = float(value)
+                if event_type == "property-change":
+                    prop = event.get("property", "")
+                    value = event.get("data")
+
+                    if prop == "pause":
+                        if value is True and last_position is not None:
+                            _on_pause()
+                        elif value is False and was_paused:
+                            _on_resume()
+                        continue
+
+                    if prop == "eof-reached":
+                        if value is True and last_position is not None:
+                            _on_eof()
+                        break
+
+                    if prop == "time-pos":
+                        if isinstance(value, (int, float)):
+                            pos_s = float(value)
+                        elif isinstance(value, str):
+                            try:
+                                pos_s = float(value)
+                            except (ValueError, TypeError):
+                                continue
+                        else:
+                            continue
                         # mpv may report near-total duration before playback
                         # starts; skip until last_position is set.
                         if (pos_s > 0 and pos_s >= total_duration * 0.99
@@ -497,25 +505,32 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         if (current_track is not None
                                 and current_track != last_position):
                             _on_track_change(current_track)
+                        continue
+
+                elif event_type == "playback-restart":
+                    if last_position is not None and was_paused:
+                        _on_resume()
                     continue
 
-            elif event_type == "playback-restart":
-                if last_position is not None and was_paused:
-                    _on_resume()
-                continue
-
-    except KeyboardInterrupt:
-        if last_position is not None:
-            _scrobble_track(last_position)
-        _clear_playing_now()
-        if verbose:
-            print("\nInterrupted", file=sys.stderr)
-    else:
-        # Generator exhausted (mpv disconnected)
-        if last_position is not None:
-            _scrobble_track(last_position)
+        except KeyboardInterrupt:
+            if last_position is not None:
+                _scrobble_track(last_position)
+            _clear_playing_now()
             if verbose:
-                print("mpv disconnected", file=sys.stderr)
+                print("\nInterrupted", file=sys.stderr)
+        else:
+            # Generator exhausted normally (mpv disconnected)
+            if last_position is not None:
+                _scrobble_track(last_position)
+                if verbose:
+                    print("mpv disconnected", file=sys.stderr)
+    except Exception:
+        # Catch-all for unexpected errors from mpv_events itself
+        if last_position is not None:
+            _scrobble_track(last_position)
+        if verbose:
+            import traceback
+            print("Monitor error: " + traceback.format_exc(), file=sys.stderr)
 
 
 def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
