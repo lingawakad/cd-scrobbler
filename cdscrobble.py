@@ -549,6 +549,11 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
                   file=sys.stderr)
         return
 
+    # Child: enable faulthandler BEFORE redirecting stderr (still terminal)
+    import faulthandler
+    faulthandler.enable()
+    faulthandler.dump_traceback(sys.stderr)
+
     # Child: detach from terminal and run monitor
     os.setsid()
 
@@ -563,6 +568,11 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
     os.dup2(log_fd, 2)  # stderr -> log
     # Don't close log_fd — the write() in except needs it
 
+    # Early debug marker
+    os.write(log_fd, b"[CHILD STARTED]\n".format())
+    sys.stdout.flush()
+    sys.stderr.flush()
+
     try:
         import socket
 
@@ -571,6 +581,8 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
         s.settimeout(5.0)
         s.connect(sock_path)
         s.close()
+        os.write(log_fd, b"[SOCKET OK]\n")
+        sys.stdout.flush()
 
         _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg)
         os._exit(0)
