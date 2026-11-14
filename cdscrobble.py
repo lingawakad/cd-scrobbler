@@ -481,7 +481,12 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 event_type = event.get("event", "")
                 if verbose:
                     try:
-                        os.write(log_fd, b"[EVT: %s]\n" % event_type.encode())
+                        prop = event.get("property", "")
+                        data = event.get("data")
+                        if prop or data is not None:
+                            os.write(log_fd, b"[EVT: %s prop=%s data=%r]\n" % (event_type.encode(), prop.encode(), data))
+                        else:
+                            os.write(log_fd, b"[EVT: %s]\n" % event_type.encode())
                     except OSError:
                         pass
 
@@ -493,6 +498,11 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 if event_type == "property-change":
                     prop = event.get("property", "")
                     value = event.get("data")
+                    if verbose:
+                        try:
+                            os.write(log_fd, b"[PROP: %s=%r]\n" % (prop.encode(), value))
+                        except OSError:
+                            pass
 
                     if prop == "pause":
                         if value is True and last_position is not None:
@@ -505,6 +515,27 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         if value is True and last_position is not None:
                             _on_eof()
                         break
+
+                    if prop == "playlist-pos":
+                        if isinstance(value, int):
+                            track_num = value + 1  # mpv is 0-indexed, tracks are 1-indexed
+                            if verbose:
+                                try:
+                                    os.write(log_fd, b"[PLAYLIST-POS: %s last=%s]\n" % (track_num, last_position))
+                                except OSError:
+                                    pass
+                            if track_num != last_position:
+                                _on_track_change(track_num)
+                        continue
+
+                    if prop == "playlist":
+                        if isinstance(value, str):
+                            if verbose:
+                                try:
+                                    os.write(log_fd, b"[PLAYLIST: %r]\n" % value)
+                                except OSError:
+                                    pass
+                        continue
 
                     if prop == "time-pos":
                         if isinstance(value, (int, float)):

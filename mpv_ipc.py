@@ -131,6 +131,9 @@ def mpv_events(sock_path: str, event_timeout: float = 2.0):
         try:
             s.sendall(b'{"command": ["get_property", "time-pos"]}\n')
             s.sendall(b'{"command": ["observe_property", 1, "time-pos", "double"]}\n')
+            # CDDA: also track playlist position (track index) as CDDA may not push time-pos continuously
+            s.sendall(b'{"command": ["observe_property", 1, "playlist-pos", "integer"]}\n')
+            s.sendall(b'{"command": ["observe_property", 1, "playlist", "json"]}\n')
         except Exception:
             pass
         # Don't drain the socket — initial probe response and early events
