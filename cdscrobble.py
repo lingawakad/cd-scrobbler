@@ -338,31 +338,6 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     track_start = None
     accumulated_play = 0.0
     current_msid = ""
-    import threading
-    import mpv_ipc
-
-    # For CDDA playback: mpv doesn't push property-change events via IPC.
-    # Spawn a background thread that polls time-pos every second via
-    # a separate IPC socket, storing the result for the event loop.
-    polled_timepos: list[float | None] = [None]
-    running: list[bool] = [True]
-
-    def _poller():
-        while running[0]:
-            try:
-                val = mpv_ipc.mpv_poll_timepos(sock_path, timeout=2)
-            except Exception:
-                val = -999.0
-            polled_timepos[0] = val
-            # Sleep in small increments so we can stop quickly
-            for _ in range(20):
-                if not running[0]:
-                    break
-                time.sleep(0.05)
-
-    poll_thread = threading.Thread(target=_poller, daemon=True)
-    poll_thread.start()
-
     lb_enabled = bool(cfg.listenbrainz_token)
     lf_enabled = cfg.lastfm_enabled
 
@@ -593,28 +568,22 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         _on_resume()
                     continue
 
-            # Check polled time-pos (CDDA doesn't push property-change events)
-            pos_s = polled_timepos[0]
-            if pos_s == -999.0:
-                if verbose:
-                    print("[POLL-ERROR]", file=sys.stderr)
-            elif pos_s is not None and isinstance(pos_s, (int, float)):
-                pos_s = float(pos_s)
-                if verbose:
-                    print("[POLL: %.3f last=%s]" % (pos_s, last_position), file=sys.stderr)
-                current_track = _current_track(pos_s) if pos_s > 0 else None
-                if verbose:
-                    print("[TRACK: %s last=%s match=%s]" % (current_track, last_position, current_track != last_position), file=sys.stderr)
-                if (current_track is not None
-                        and current_track != last_position):
-                    _on_track_change(current_track)
+                elif event_type == "mpv-poll":
+                    pos_s = float(event.get("pos", 0))
+                    if verbose:
+                        print("[POLL: %.3f last=%s]" % (pos_s, last_position), file=sys.stderr)
+                    current_track = _current_track(pos_s) if pos_s > 0 else None
+                    if verbose:
+                        print("[TRACK: %s last=%s match=%s]" % (current_track, last_position, current_track != last_position), file=sys.stderr)
+                    if (current_track is not None
+                            and current_track != last_position):
+                        _on_track_change(current_track)
+                    continue
 
         except KeyboardInterrupt:
             if last_position is not None:
                 _scrobble_track(last_position)
             _clear_playing_now()
-            running[0] = False
-            poll_thread.join(timeout=1)
             if verbose:
                 print("\nInterrupted", file=sys.stderr)
         else:
@@ -623,8 +592,6 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 _scrobble_track(last_position)
                 if verbose:
                     print("mpv disconnected", file=sys.stderr)
-            running[0] = False
-            poll_thread.join(timeout=1)
     except Exception:
         # Catch-all for unexpected errors from mpv_events itself
         if last_position is not None:

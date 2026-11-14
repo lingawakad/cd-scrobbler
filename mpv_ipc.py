@@ -163,7 +163,17 @@ def mpv_events(sock_path: str, event_timeout: float = 2.0):
                     raise MpvDisconnected("socket closed")
                 buf += chunk
             except socket.timeout:
-                # No new data — nothing to yield, loop back to recv
+                # Poll time-pos on each timeout so the caller gets periodic
+                # position updates. Needed for CDDA which doesn't push
+                # property-change events through the IPC event stream.
+                try:
+                    pos_val = _mpv_request(sock_path, ["get_property", "time-pos"], timeout=0.5)
+                    if isinstance(pos_val, dict) and pos_val.get("error") == "success":
+                        data = pos_val.get("data")
+                        if isinstance(data, (int, float)):
+                            yield {"event": "mpv-poll", "pos": data}
+                except Exception:
+                    pass
                 continue
 
             # Decode any complete JSON objects from the buffer,
