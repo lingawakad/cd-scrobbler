@@ -602,16 +602,12 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 pos_s = float(pos_s)
                 if verbose:
                     print("[POLL: %.3f last=%s]" % (pos_s, last_position), file=sys.stderr)
-                if (pos_s > 0 and pos_s >= total_duration * 0.99
-                        and last_position is None):
-                    pass  # skip early position
-                else:
-                    current_track = _current_track(pos_s) if pos_s > 0 else None
-                    if verbose:
-                        print("[TRACK: %s last=%s match=%s]" % (current_track, last_position, current_track != last_position), file=sys.stderr)
-                    if (current_track is not None
-                            and current_track != last_position):
-                        _on_track_change(current_track)
+                current_track = _current_track(pos_s) if pos_s > 0 else None
+                if verbose:
+                    print("[TRACK: %s last=%s match=%s]" % (current_track, last_position, current_track != last_position), file=sys.stderr)
+                if (current_track is not None
+                        and current_track != last_position):
+                    _on_track_change(current_track)
 
         except KeyboardInterrupt:
             if last_position is not None:
