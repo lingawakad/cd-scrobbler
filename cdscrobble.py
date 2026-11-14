@@ -575,7 +575,7 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
         print("[SOCKET OK]", file=sys.stderr)
         sys.stdout.flush()
 
-        _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg, log_fd)
+        _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg)
         os._exit(0)
     except SystemExit:
         raise
