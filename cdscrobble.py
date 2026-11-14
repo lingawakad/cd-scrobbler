@@ -552,7 +552,6 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
     # Child: enable faulthandler BEFORE redirecting stderr (still terminal)
     import faulthandler
     faulthandler.enable()
-    faulthandler.dump_traceback(sys.stderr)
 
     # Child: detach from terminal and run monitor
     os.setsid()
@@ -569,7 +568,7 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
     # Don't close log_fd — the write() in except needs it
 
     # Early debug marker
-    os.write(log_fd, b"[CHILD STARTED]\n".format())
+    os.write(log_fd, b"[CHILD STARTED]\n")
     sys.stdout.flush()
     sys.stderr.flush()
 
