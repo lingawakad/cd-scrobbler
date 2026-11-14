@@ -318,7 +318,7 @@ def cmd_play(args, verbose, cfg: _Config):
     return
 
 
-def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool, cfg: _Config):
+def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing: bool, cfg: _Config, log_fd):
     """Monitor mpv via IPC socket and scrobble tracks to configured backends.
 
     Uses mpv's event stream (push-based) instead of polling every second.
@@ -356,12 +356,22 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 pass
 
     def _scrobble_track(position):
+        if verbose:
+            try:
+                os.write(log_fd, b"[SCROBBLE-CHECK: pos=%s scrobbled=%s st=%s ts=%s]\n" % (position, position in scrobbled, start_time, track_start))
+            except OSError:
+                pass
         if position not in scrobbled and start_time and track_start:
             played = (time.time() - start_time) + accumulated_play
             track = tracks_by_pos.get(position, {})
             track_len = track.get("length_ms", 0) / 1000 if track.get("length_ms") else 0
             min_played = min(4 * 60, track_len / 2) if track_len > 0 else 4 * 60
             if played > min_played:
+                if verbose:
+                    try:
+                        os.write(log_fd, b"[SCROBBLE-FIRE: pos=%s played=%.1f]\n" % (position, played))
+                    except OSError:
+                        pass
                 track.setdefault("album", info["title"])
                 track.setdefault("artist", info["artist"])
                 track.setdefault("release_mbid", info.get("release_mbid", ""))
@@ -393,6 +403,11 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     def _on_track_change(current_track):
         """Handle a track boundary transition."""
         nonlocal last_position, start_time, track_start, accumulated_play, was_paused, current_msid
+        if verbose:
+            try:
+                os.write(log_fd, b"[ON-CHANGE: %s last=%s]\n" % (current_track, last_position))
+            except OSError:
+                pass
         if last_position is not None:
             _scrobble_track(last_position)
         start_time = time.time()
@@ -464,6 +479,11 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
         try:
             for event in mpv_events(sock_path):
                 event_type = event.get("event", "")
+                if verbose:
+                    try:
+                        os.write(log_fd, b"[EVT: %s]\n" % event_type.encode())
+                    except OSError:
+                        pass
 
                 if event_type == "end-file":
                     if last_position is not None:
@@ -502,6 +522,11 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                                 and last_position is None):
                             continue
                         current_track = _current_track(pos_s) if pos_s > 0 else None
+                        if verbose:
+                            try:
+                                os.write(log_fd, b"[TRACK: %s last=%s match=%s]\n" % (current_track, last_position, current_track == last_position))
+                            except OSError:
+                                pass
                         if (current_track is not None
                                 and current_track != last_position):
                             _on_track_change(current_track)
@@ -583,7 +608,7 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
         os.write(log_fd, b"[SOCKET OK]\n")
         sys.stdout.flush()
 
-        _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg)
+        _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg, log_fd)
         os._exit(0)
     except SystemExit:
         raise
