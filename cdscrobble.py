@@ -383,7 +383,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     def _scrobble_track(position):
         if verbose:
             try:
-                os.write(log_fd, b"[SCROBBLE-CHECK: pos=%s scrobbled=%s st=%s ts=%s]\n" % (position, position in scrobbled, start_time, track_start))
+                os.write(log_fd, b"[SCROBBLE-CHECK: pos=%s scrobbled=%s st=%s ts=%s]\n" % (str(position), str(position in scrobbled), str(start_time), str(track_start)))
             except OSError:
                 pass
         if position not in scrobbled and start_time and track_start:
@@ -394,7 +394,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
             if played > min_played:
                 if verbose:
                     try:
-                        os.write(log_fd, b"[SCROBBLE-FIRE: pos=%s played=%.1f]\n" % (position, played))
+                        os.write(log_fd, b"[SCROBBLE-FIRE: pos=%s played=%.1f]\n" % (str(position), played))
                     except OSError:
                         pass
                 track.setdefault("album", info["title"])
@@ -430,7 +430,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
         nonlocal last_position, start_time, track_start, accumulated_play, was_paused, current_msid
         if verbose:
             try:
-                os.write(log_fd, b"[ON-CHANGE: %s last=%s]\n" % (current_track, last_position))
+                os.write(log_fd, b"[ON-CHANGE: %s last=%s]\n" % (str(current_track), str(last_position)))
             except OSError:
                 pass
         if last_position is not None:
@@ -546,7 +546,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                             track_num = value + 1  # mpv is 0-indexed, tracks are 1-indexed
                             if verbose:
                                 try:
-                                    os.write(log_fd, b"[PLAYLIST-POS: %s last=%s]\n" % (track_num, last_position))
+                                    os.write(log_fd, b"[PLAYLIST-POS: %s last=%s]\n" % (str(track_num), str(last_position)))
                                 except OSError:
                                     pass
                             if track_num != last_position:
@@ -580,7 +580,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         current_track = _current_track(pos_s) if pos_s > 0 else None
                         if verbose:
                             try:
-                                os.write(log_fd, b"[TRACK: %s last=%s match=%s]\n" % (current_track, last_position, current_track == last_position))
+                                os.write(log_fd, b"[TRACK: %s last=%s match=%s]\n" % (str(current_track), str(last_position), str(current_track == last_position)))
                             except OSError:
                                 pass
                         if (current_track is not None
@@ -601,14 +601,14 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
             elif pos_s is not None and isinstance(pos_s, (int, float)):
                 pos_s = float(pos_s)
                 if verbose:
-                    os.write(log_fd, b"[POLL: %.3f last=%s]\n" % (pos_s, last_position))
+                    os.write(log_fd, b"[POLL: %.3f last=%s]\n" % (pos_s, str(last_position)))
                 if (pos_s > 0 and pos_s >= total_duration * 0.99
                         and last_position is None):
                     pass  # skip early position
                 else:
                     current_track = _current_track(pos_s) if pos_s > 0 else None
                     if verbose:
-                        os.write(log_fd, b"[TRACK: %s last=%s match=%s]\n" % (current_track, last_position, current_track != last_position))
+                        os.write(log_fd, b"[TRACK: %s last=%s match=%s]\n" % (str(current_track), str(last_position), str(current_track != last_position)))
                     if (current_track is not None
                             and current_track != last_position):
                         _on_track_change(current_track)
