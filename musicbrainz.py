@@ -119,7 +119,8 @@ def find_releases(disc_id: str, toc: str | None = None) -> list[dict]:
         for r in releases
     ]
 
-    _set_cached(key, releases_list, cache)
+    mbids = [r["mbid"] for r in releases_list]
+    _set_cached(key, mbids, cache)
     return releases_list
 
 

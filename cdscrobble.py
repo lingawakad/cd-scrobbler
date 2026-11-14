@@ -191,7 +191,15 @@ def cmd_lookup(args, verbose, cfg: _Config):
         # Check cache for disc ID -> release MBID
         cache = _load_cache()
         disc_key = f"disc:{disc_id}"
-        cached_mbid = _get_cached(disc_key, cache)
+        cached = _get_cached(disc_key, cache)
+        if isinstance(cached, list):
+            # Old format: list of dicts with "mbid" key; new format: list of strings
+            if cached and isinstance(cached[0], dict):
+                cached_mbid = cached[0]["mbid"]
+            else:
+                cached_mbid = cached[0] if cached else None
+        else:
+            cached_mbid = cached if cached else None
         if cached_mbid:
             if verbose:
                 print("Cache hit (disc ID)", file=sys.stderr)
@@ -251,7 +259,15 @@ def cmd_play(args, verbose, cfg: _Config):
     # Step 2: Check cache for disc ID -> release MBID
     cache = _load_cache()
     disc_key = f"disc:{disc_id}"
-    cached_mbid = _get_cached(disc_key, cache)
+    cached = _get_cached(disc_key, cache)
+    if isinstance(cached, list):
+        # Old format: list of dicts with "mbid" key; new format: list of strings
+        if cached and isinstance(cached[0], dict):
+            cached_mbid = cached[0]["mbid"]
+        else:
+            cached_mbid = cached[0] if cached else None
+    else:
+        cached_mbid = cached if cached else None
     if cached_mbid:
         if verbose:
             print("Cache hit (disc ID)", file=sys.stderr)
@@ -624,8 +640,12 @@ def cmd_cache(args, verbose, cfg: _Config):
 
     existing = _get_cached(disc_key, cache)
     if existing:
+        if isinstance(existing, list):
+            existing_strs = existing
+        else:
+            existing_strs = [existing] if existing else []
         print(f"Already cached: {disc_key} -> {existing}")
-        if existing != mbid:
+        if mbid not in existing_strs:
             print(f"Overwriting with {mbid}...", file=sys.stderr)
 
     _set_cached(disc_key, mbid, cache)
