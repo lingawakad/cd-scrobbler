@@ -383,7 +383,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     def _scrobble_track(position):
         if verbose:
             try:
-                os.write(log_fd, b"[SCROBBLE-CHECK: pos=%s scrobbled=%s st=%s ts=%s]\n" % (str(position), str(position in scrobbled), str(start_time), str(track_start)))
+                print("[SCROBBLE-CHECK: pos=%s scrobbled=%s st=%s ts=%s]" % (position, position in scrobbled, start_time, track_start), file=sys.stderr)
             except OSError:
                 pass
         if position not in scrobbled and start_time and track_start:
@@ -394,7 +394,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
             if played > min_played:
                 if verbose:
                     try:
-                        os.write(log_fd, b"[SCROBBLE-FIRE: pos=%s played=%.1f]\n" % (str(position), played))
+                        print("[SCROBBLE-FIRE: pos=%s played=%.1f]" % (position, played), file=sys.stderr)
                     except OSError:
                         pass
                 track.setdefault("album", info["title"])
@@ -430,7 +430,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
         nonlocal last_position, start_time, track_start, accumulated_play, was_paused, current_msid
         if verbose:
             try:
-                os.write(log_fd, b"[ON-CHANGE: %s last=%s]\n" % (str(current_track), str(last_position)))
+                print("[ON-CHANGE: %s last=%s]" % (current_track, last_position), file=sys.stderr)
             except OSError:
                 pass
         if last_position is not None:
@@ -509,9 +509,9 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         prop = event.get("property", "")
                         data = event.get("data")
                         if prop or data is not None:
-                            os.write(log_fd, b"[EVT: %s prop=%s data=%r]\n" % (event_type.encode(), prop.encode(), data))
+                            print("[EVT: %s prop=%s data=%r]" % (event_type, prop, data), file=sys.stderr)
                         else:
-                            os.write(log_fd, b"[EVT: %s]\n" % event_type.encode())
+                            print("[EVT: %s]" % event_type, file=sys.stderr)
                     except OSError:
                         pass
 
@@ -525,7 +525,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     value = event.get("data")
                     if verbose:
                         try:
-                            os.write(log_fd, b"[PROP: %s=%r]\n" % (prop.encode(), value))
+                            print("[PROP: %s=%r]" % (prop, value), file=sys.stderr)
                         except OSError:
                             pass
 
@@ -546,7 +546,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                             track_num = value + 1  # mpv is 0-indexed, tracks are 1-indexed
                             if verbose:
                                 try:
-                                    os.write(log_fd, b"[PLAYLIST-POS: %s last=%s]\n" % (str(track_num), str(last_position)))
+                                    print("[PLAYLIST-POS: %s last=%s]" % (track_num, last_position), file=sys.stderr)
                                 except OSError:
                                     pass
                             if track_num != last_position:
@@ -557,7 +557,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         if isinstance(value, str):
                             if verbose:
                                 try:
-                                    os.write(log_fd, b"[PLAYLIST: %r]\n" % value)
+                                    print("[PLAYLIST: %r]" % value, file=sys.stderr)
                                 except OSError:
                                     pass
                         continue
@@ -580,7 +580,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         current_track = _current_track(pos_s) if pos_s > 0 else None
                         if verbose:
                             try:
-                                os.write(log_fd, b"[TRACK: %s last=%s match=%s]\n" % (str(current_track), str(last_position), str(current_track == last_position)))
+                                print("[TRACK: %s last=%s match=%s]" % (current_track, last_position, current_track == last_position), file=sys.stderr)
                             except OSError:
                                 pass
                         if (current_track is not None
@@ -597,18 +597,18 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
             pos_s = polled_timepos[0]
             if pos_s == -999.0:
                 if verbose:
-                    os.write(log_fd, b"[POLL-ERROR]\n")
+                    print("[POLL-ERROR]", file=sys.stderr)
             elif pos_s is not None and isinstance(pos_s, (int, float)):
                 pos_s = float(pos_s)
                 if verbose:
-                    os.write(log_fd, b"[POLL: %.3f last=%s]\n" % (pos_s, str(last_position)))
+                    print("[POLL: %.3f last=%s]" % (pos_s, last_position), file=sys.stderr)
                 if (pos_s > 0 and pos_s >= total_duration * 0.99
                         and last_position is None):
                     pass  # skip early position
                 else:
                     current_track = _current_track(pos_s) if pos_s > 0 else None
                     if verbose:
-                        os.write(log_fd, b"[TRACK: %s last=%s match=%s]\n" % (str(current_track), str(last_position), str(current_track != last_position)))
+                        print("[TRACK: %s last=%s match=%s]" % (current_track, last_position, current_track != last_position), file=sys.stderr)
                     if (current_track is not None
                             and current_track != last_position):
                         _on_track_change(current_track)
@@ -673,7 +673,7 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
     # Don't close log_fd — the write() in except needs it
 
     # Early debug marker
-    os.write(log_fd, b"[CHILD STARTED]\n")
+    print("[CHILD STARTED]", file=sys.stderr)
     sys.stdout.flush()
     sys.stderr.flush()
 
@@ -685,7 +685,7 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
         s.settimeout(5.0)
         s.connect(sock_path)
         s.close()
-        os.write(log_fd, b"[SOCKET OK]\n")
+        print("[SOCKET OK]", file=sys.stderr)
         sys.stdout.flush()
 
         _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg, log_fd)
