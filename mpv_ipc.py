@@ -130,6 +130,7 @@ def mpv_events(sock_path: str, event_timeout: float = 2.0):
         # Wake mpv so it starts the event stream.
         try:
             s.sendall(b'{"command": ["get_property", "time-pos"]}\n')
+            s.sendall(b'{"command": ["observe_property", 1, "time-pos", "double"]}\n')
         except Exception:
             pass
         # Don't drain the socket — initial probe response and early events
