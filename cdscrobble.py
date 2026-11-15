@@ -16,7 +16,7 @@ from config import (
 from mbid import get_disc_info, get_cdtext, DiscReadError
 from mpv_ipc import (
     _get_default_socket, wait_for_mpv,
-    mpv_get_status, mpv_get_position, mpv_command,
+    mpv_get_property, mpv_get_status, mpv_get_position, mpv_command,
     MpvDisconnected, mpv_events,
 )
 from musicbrainz import (
@@ -423,7 +423,29 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
             try:
                 status = mpv_get_status(sock_path)
                 pos_s = mpv_get_position(sock_path)
+                # Also poll playlist-pos to detect CDDA completion
+                # mpv's CDDA track index (0-indexed). When the last
+                # track ends, playlist-pos goes to -1.
+                try:
+                    playlist_pos = mpv_get_property(
+                        sock_path, "playlist-pos")
+                except (RuntimeError, ConnectionError):
+                    playlist_pos = None
                 mpv_connected = True
+
+                # Detect playlist end (CDDA finished after last track)
+                if (
+                    last_position is not None
+                    and playlist_pos == -1
+                ):
+                    if verbose:
+                        print("Playlist ended — last track finished",
+                              file=sys.stderr)
+                    _scrobble_track(last_position)
+                    _clear_playing_now()
+                    last_position = None
+                    start_time = None
+                    break
 
                 # Detect playback stopped — scrobble current track then exit
                 if status == "Stopped" and last_position is not None:
