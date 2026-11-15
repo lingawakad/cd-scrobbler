@@ -446,6 +446,17 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     start_time = None
                     break
 
+                # Detect position reset (CD finished and wrapped to 0).
+                # mpv can report pos=0 after the last track ends, which
+                # makes _current_track return None — catch it before that
+                # state hides the final track.
+                if last_position is not None and pos_s < 0.5:
+                    _scrobble_track(last_position)
+                    _clear_playing_now()
+                    last_position = None
+                    start_time = None
+                    break
+
                 # Detect pause — scrobble current track, stay alive for resume
                 if status == "Paused" and last_position is not None:
                     _scrobble_track(last_position)
