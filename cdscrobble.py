@@ -16,7 +16,7 @@ from config import (
 from mbid import get_disc_info, get_cdtext, DiscReadError
 from mpv_ipc import (
     _get_default_socket, wait_for_mpv,
-    mpv_get_property, mpv_get_status, mpv_get_position, mpv_command,
+    mpv_get_status, mpv_get_position, mpv_command,
     MpvDisconnected, mpv_events,
 )
 from musicbrainz import (
@@ -379,10 +379,6 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
             track_len = track.get("length_ms", 0) / 1000 if track.get("length_ms") else 0
             min_played = min(4 * 60, track_len / 2) if track_len > 0 else 4 * 60
             if played > min_played:
-                print(f"[SCROBBLE pos={position} played={played:.1f} min={min_played:.1f} "
-                      f"scrobbled_before={position in scrobbled} "
-                      f"start_time={start_time is not None} track_start={track_start is not None}]",
-                      file=sys.stderr)
                 track.setdefault("album", info["title"])
                 track.setdefault("artist", info["artist"])
                 track.setdefault("release_mbid", info.get("release_mbid", ""))
@@ -410,13 +406,6 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         if verbose:
                             print(f"LF scrobble failed, queued: {e}", file=sys.stderr)
                 scrobbled.add(position)
-            else:
-                print(f"[SCROBBLE-SKIP pos={position} played={played:.1f} min={min_played:.1f}]",
-                      file=sys.stderr)
-        else:
-            print(f"[SCROBBLE-SKIP cond: scrobbled={position in scrobbled} "
-                  f"start_time={start_time is not None} track_start={track_start is not None} "
-                  f"last_pos={position}]", file=sys.stderr)
 
     total_duration = (track_offsets[-1] + info["tracks"][-1].get("length_ms", 0) / 1000) \
         if track_offsets else 0
@@ -428,55 +417,24 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
         for i in range(len(track_offsets) - 1):
             if track_offsets[i] <= position_s < track_offsets[i + 1]:
                 return i + 1  # track positions are 1-indexed
+        # Position is past all known track start boundaries (in the last track)
+        if position_s >= track_offsets[-1]:
+            return len(track_offsets)  # last track (1-indexed)
         return 1  # position 0 or before first track boundary
 
     try:
-        tick = 0
         while True:
-            tick += 1
             try:
                 status = mpv_get_status(sock_path)
                 pos_s = mpv_get_position(sock_path)
-                # Also poll playlist-pos to detect CDDA completion
-                # mpv's CDDA track index (0-indexed). When the last
-                # track ends, playlist-pos goes to -1.
-                try:
-                    playlist_pos = mpv_get_property(
-                        sock_path, "playlist-pos")
-                except (RuntimeError, ConnectionError):
-                    playlist_pos = None
                 mpv_connected = True
 
-                # Debug log every iteration while a track is playing
-                if last_position is not None and tick % 5 == 0:
-                    print(f"[MONITOR tick={tick} status={status} "
-                          f"pos={pos_s:.1f} last_pos={last_position} "
-                          f"playlist_pos={playlist_pos} "
-                          f"started={start_time is not None} "
-                          f"track_start={track_start}]",
-                          file=sys.stderr)
-
-                # Detect playlist end (CDDA finished after last track)
-                if (
-                    last_position is not None
-                    and playlist_pos == -1
-                ):
-                    print("[EXIT playlist_pos=-1]", file=sys.stderr)
+                # Detect playback stopped — scrobble current track then exit
+                if status == "Stopped" and last_position is not None:
                     _scrobble_track(last_position)
                     _clear_playing_now()
                     last_position = None
                     start_time = None
-                    break
-
-                # Detect playback stopped — scrobble current track then exit
-                if status == "Stopped":
-                    if last_position is not None:
-                        print("[EXIT Stopped]", file=sys.stderr)
-                        _scrobble_track(last_position)
-                        _clear_playing_now()
-                    last_position = None
-                    start_time = None
-                    print("[EXIT Stopped] end", file=sys.stderr)
                     break
 
                 # Fallback: mpv may not report "Stopped" for CD/audio-only
@@ -486,7 +444,6 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     and total_duration > 0
                     and pos_s >= total_duration
                 ):
-                    print(f"[EXIT pos>=duration pos={pos_s:.1f} dur={total_duration:.1f}]", file=sys.stderr)
                     _scrobble_track(last_position)
                     _clear_playing_now()
                     last_position = None
@@ -498,7 +455,6 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 # makes _current_track return None — catch it before that
                 # state hides the final track.
                 if last_position is not None and pos_s < 0.5:
-                    print(f"[EXIT pos reset pos={pos_s:.2f} last_pos={last_position}]", file=sys.stderr)
                     _scrobble_track(last_position)
                     _clear_playing_now()
                     last_position = None
@@ -538,7 +494,6 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 if current_track is not None and current_track != last_position:
                     # Scrobble previous track
                     if last_position is not None:
-                        print(f"[TRACK-CHANGE] {last_position} -> {current_track}", file=sys.stderr)
                         _scrobble_track(last_position)
 
                     # New track started — record when this track began
@@ -548,7 +503,6 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                     was_paused = False
                     current_msid = ""  # reset for new track
                     last_position = current_track
-                    print(f"[TRACK-START] {current_track} (started={start_time:.1f} ts={track_start:.1f})", file=sys.stderr)
 
                     # Submit playing_now to enabled backends
                     if not no_playing:
@@ -595,13 +549,10 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
 
     except KeyboardInterrupt:
         if last_position is not None:
-            print("[EXIT KeyboardInterrupt]", file=sys.stderr)
             _scrobble_track(last_position)
         _clear_playing_now()
         if verbose:
             print("\nInterrupted", file=sys.stderr)
-
-    print("[MONITOR EXIT] finished normally", file=sys.stderr)
 
 
 
@@ -656,7 +607,6 @@ def _daemonize_monitor(info, sock_path, verbose, no_playing, cfg):
         sys.stdout.flush()
 
         _monitor_and_scrobble(info, sock_path, verbose, no_playing, cfg)
-        print("[DAEMON EXIT] monitor completed", file=sys.stderr)
         os._exit(0)
     except SystemExit:
         raise
