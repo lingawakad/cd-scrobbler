@@ -418,7 +418,8 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                   f"start_time={start_time is not None} track_start={track_start is not None} "
                   f"last_pos={position}]", file=sys.stderr)
 
-    total_duration = track_offsets[-1] if track_offsets else 0
+    total_duration = (track_offsets[-1] + info["tracks"][-1].get("length_ms", 0) / 1000) \
+        if track_offsets else 0
 
     def _current_track(position_s):
         """Map position (seconds) to track number."""
