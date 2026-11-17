@@ -33,7 +33,7 @@ from listenbrainz import submit_listen as lb_submit_listen, submit_playing_now a
 from lastfm import submit_listen as lf_submit_listen, submit_playing_now as lf_submit_playing_now, clear_playing_now as lf_clear_playing_now
 from offline_queue import enqueue, flush_queue, queue_size
 
-USER_AGENT = "cd-scrobbler/0.5.0 (recent8571@proton.me)"
+USER_AGENT = "cd-scrobbler/0.5.1 (recent8571@proton.me)"
 
 LOG_FILE = Path.home() / ".config" / "cd-scrobbler" / "monitor.log"
 
