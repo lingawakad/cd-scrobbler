@@ -7,6 +7,7 @@ import re
 import socket
 import sys
 import time
+import urllib.error
 from pathlib import Path
 
 from mbid import DISC_ID_RE
@@ -68,13 +69,45 @@ def _init():
 _MB_TIMEOUT = 15  # seconds
 
 
+class MusicBrainzUnreachable(RuntimeError):
+    """Raised when musicbrainz.org can't be reached over the network."""
+
+
+# Set after the first network failure so later calls in the same run fail
+# immediately instead of each waiting out their own timeouts.
+_mb_unreachable_msg: str | None = None
+
+
 def _do_mb_call(fn, *args, **kwargs):
-    """Call a musicbrainzngs function with a hard network timeout."""
-    import socket
+    """Call a musicbrainzngs function with a hard network timeout.
+
+    Raises MusicBrainzUnreachable if the server can't be reached.
+    """
+    global _mb_unreachable_msg
+    if _mb_unreachable_msg is not None:
+        raise MusicBrainzUnreachable(_mb_unreachable_msg)
+
     old_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(_MB_TIMEOUT)
     try:
         return fn(*args, **kwargs)
+    except (musicbrainzngs.NetworkError, OSError) as e:
+        # NetworkError wraps a urllib URLError, whose .reason is the real cause
+        cause = getattr(e, "cause", None) or e
+        reason = getattr(cause, "reason", cause)
+        if isinstance(cause, urllib.error.HTTPError):
+            # Server answered, but kept failing (e.g. 503 overload) after retries
+            raise MusicBrainzUnreachable(
+                f"MusicBrainz isn't responding properly (HTTP {cause.code} "
+                f"{reason}) — try again in a few minutes."
+            ) from e
+        _mb_unreachable_msg = (
+            f"can't reach MusicBrainz (musicbrainz.org): {reason}\n"
+            "Check your network connection. If IPv6 is broken on this network, "
+            "connections hang until they time out — try disabling IPv6 or "
+            "preferring IPv4 in /etc/gai.conf."
+        )
+        raise MusicBrainzUnreachable(_mb_unreachable_msg) from e
     finally:
         socket.setdefaulttimeout(old_timeout)
 

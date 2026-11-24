@@ -28,7 +28,9 @@ from musicbrainz import (
     _get_cached,
     _set_cached,
     _flush_cache,
+    MusicBrainzUnreachable,
 )
+from listenbrainz import TOKEN_FILE as LB_TOKEN_FILE
 from listenbrainz import submit_listen as lb_submit_listen, submit_playing_now as lb_submit_playing_now, clear_playing_now as lb_clear_playing_now
 from lastfm import submit_listen as lf_submit_listen, submit_playing_now as lf_submit_playing_now, clear_playing_now as lf_clear_playing_now
 from offline_queue import enqueue, flush_queue, queue_size
@@ -122,7 +124,9 @@ def main():
     # Flush any pending queue entries at startup
     if hasattr(args, 'command') and args.command != "queue":
         try:
-            ok, remaining = flush_queue(lambda e: _submit_queued(e, cfg))
+            ok, remaining, dropped = flush_queue(lambda e: _submit_queued(e, cfg))
+            if dropped:
+                _warn_dropped(dropped)
             if ok and verbose:
                 print(f"Flushed {ok} queued scrobble(s)", file=sys.stderr)
             if remaining and verbose:
@@ -131,6 +135,17 @@ def main():
             if verbose:
                 print(f"Queue flush error: {e}", file=sys.stderr)
 
+    try:
+        _dispatch(args, parser, verbose, cfg)
+    except MusicBrainzUnreachable as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except DiscReadError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _dispatch(args, parser, verbose, cfg: _Config):
     if args.command == "lookup":
         cmd_lookup(args, verbose, cfg)
     elif args.command == "play":
@@ -148,6 +163,16 @@ def main():
     else:
         parser.print_help()
         sys.exit(1)
+
+
+def _lb_token(cfg: _Config) -> str | None:
+    """ListenBrainz token from config, falling back to ~/.lbtoken."""
+    if cfg.listenbrainz_token:
+        return cfg.listenbrainz_token
+    try:
+        return _get_lb_token_from_file() or None
+    except LookupError:
+        return None
 
 
 def _submit_queued(entry: dict, config: _Config | dict) -> None:
@@ -214,6 +239,8 @@ def cmd_lookup(args, verbose, cfg: _Config):
     except DiscReadError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+    except MusicBrainzUnreachable:
+        raise
     except Exception as e:
         if verbose:
             print(f"Disc ID lookup failed: {e}", file=sys.stderr)
@@ -283,6 +310,8 @@ def cmd_play(args, verbose, cfg: _Config):
         # Step 3: Lookup CD (API calls)
         try:
             release = find_release(disc_id, toc=toc)
+        except MusicBrainzUnreachable:
+            raise
         except Exception as e:
             if verbose:
                 print(f"Disc ID lookup failed: {e}", file=sys.stderr)
@@ -311,19 +340,38 @@ def cmd_play(args, verbose, cfg: _Config):
 
     no_playing = args.no_playing_now or cfg.no_playing_now
 
+    if not _lb_token(cfg) and not cfg.lastfm_enabled:
+        print("Warning: no scrobbling service configured — this playback "
+              "won't be scrobbled.", file=sys.stderr)
+        print(f"  ListenBrainz: put your token in {LB_TOKEN_FILE} or set "
+              "listenbrainz_token in ~/.config/cd-scrobbler/config", file=sys.stderr)
+        print("  Last.fm: run 'cdscrobble lastfm login'", file=sys.stderr)
+
     # Ensure parent directory exists for the IPC socket
     Path(sock_path).parent.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen(
-        ["mpv", "--demuxer-max-bytes=20MiB",
-         "--input-ipc-server=" + sock_path,
-         "--ao=pipewire", "--gapless-audio", f"cdda://{device}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    mpv_cmd = ["mpv", "--demuxer-max-bytes=20MiB",
+               "--input-ipc-server=" + sock_path,
+               "--ao=pipewire", "--gapless-audio", f"cdda://{device}"]
+    try:
+        mpv_proc = subprocess.Popen(
+            mpv_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        print("Error: mpv not found — install it with: sudo dnf install mpv",
+              file=sys.stderr)
+        sys.exit(1)
     if verbose:
         print("Playback started", file=sys.stderr)
     # Wait for mpv to be ready and playing
     if not wait_for_mpv(sock_path, verbose=verbose):
-        print("Warning: mpv did not start within 30s", file=sys.stderr)
+        if mpv_proc.poll() is not None:
+            print(f"Error: mpv exited with status {mpv_proc.returncode} "
+                  "before playback started.", file=sys.stderr)
+            print(f"Run it directly to see why:\n  mpv cdda://{device}",
+                  file=sys.stderr)
+            sys.exit(1)
+        print("Warning: mpv did not start playing within 30s "
+              "(continuing; the monitor will keep waiting)", file=sys.stderr)
 
     # Daemonize: fork so the monitor runs in the background,
     # releasing the prompt immediately.
@@ -355,7 +403,8 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
     track_start = None         # wall-clock time when current track first started
     accumulated_play = 0.0     # total playtime for current track across pauses
     current_msid = ""            # recording_msid from LB playing_now (for correlation)
-    lb_enabled = bool(cfg.listenbrainz_token)
+    lb_token = _lb_token(cfg)
+    lb_enabled = bool(lb_token)
     lf_enabled = cfg.lastfm_enabled
 
     def _clear_playing_now():
@@ -363,7 +412,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
             return
         if lb_enabled:
             try:
-                lb_clear_playing_now(cfg.listenbrainz_token)
+                lb_clear_playing_now(lb_token)
             except Exception:
                 pass
         if lf_enabled:
@@ -387,7 +436,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                 ts = int(track_start)
                 if lb_enabled:
                     try:
-                        lb_submit_listen(track, ts, cfg.listenbrainz_token)
+                        lb_submit_listen(track, ts, lb_token)
                         if verbose:
                             print(f"Scrobbled (LB): {track.get('title', position)}", file=sys.stderr)
                     except Exception as e:
@@ -513,7 +562,7 @@ def _monitor_and_scrobble(info: dict, sock_path: str, verbose: bool, no_playing:
                         if lb_enabled:
                             try:
                                 msid = lb_submit_playing_now(
-                                    track, cfg.listenbrainz_token)
+                                    track, lb_token)
                                 current_msid = msid if msid else ""
                                 if verbose:
                                     print(f"Now (LB): {track.get('title', current_track)}",
@@ -798,13 +847,26 @@ def cmd_queue(args, verbose, cfg):
             print(f"  [{i+1}] {dt}  {artist} — {title}  (retries: {retries})")
 
     if args.flush:
-        ok, remaining = flush_queue(lambda e: _submit_queued(e, cfg))
+        ok, remaining, dropped = flush_queue(lambda e: _submit_queued(e, cfg))
+        if dropped:
+            _warn_dropped(dropped)
         if ok:
             print(f"Flushed: {ok} scrobble(s) submitted")
         if remaining:
             print(f"Remaining: {remaining} (will retry next run)")
         else:
             print("Queue is now empty")
+
+
+def _warn_dropped(dropped: list[dict]) -> None:
+    print(f"Warning: gave up on {len(dropped)} queued scrobble(s) after "
+          "repeated failures:", file=sys.stderr)
+    for entry in dropped:
+        track = entry.get("track", {})
+        ts = entry.get("listened_at")
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "?"
+        print(f"  {when}  {track.get('artist', '')} — {track.get('title', '?')} "
+              f"({entry.get('backend', 'listenbrainz')})", file=sys.stderr)
 
 
 def cmd_control(args, cfg: _Config):
@@ -915,7 +977,8 @@ def _lastfm_mobile_login(cfg: _Config, verbose: bool = False):
         print("No username provided.", file=sys.stderr)
         sys.exit(1)
 
-    password = input("Password: ").strip()
+    import getpass
+    password = getpass.getpass("Password: ").strip()
     if not password:
         print("No password provided.", file=sys.stderr)
         sys.exit(1)
@@ -931,12 +994,15 @@ def _lastfm_mobile_login(cfg: _Config, verbose: bool = False):
         print(f"Authenticated as {username}")
         print("Session key accepted. Last.fm scrobbling is active.")
         save_config({"lastfm_session_key": session_key})
-    except Exception as e:
-        print(f"Error: server response error ({e})", file=sys.stderr)
-        sys.exit(1)
-    except pylast.PyLastError as e:
+    except pylast.WSError as e:
         print(f"Error: authentication failed ({e})", file=sys.stderr)
         print("Check your username and password.", file=sys.stderr)
+        sys.exit(1)
+    except pylast.NetworkError as e:
+        print(f"Error: can't reach Last.fm ({e})", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: server response error ({e})", file=sys.stderr)
         sys.exit(1)
 
 

@@ -47,23 +47,28 @@ def dequeue() -> list[dict]:
     return entries
 
 
-def flush_queue(submit_fn) -> tuple[int, int]:
-    """Try to submit all queued entries. Returns (success_count, remaining_count).
+def flush_queue(submit_fn) -> tuple[int, int, list[dict]]:
+    """Try to submit all queued entries.
+
+    Returns (success_count, remaining_count, dropped_entries), where
+    dropped_entries are ones that hit MAX_RETRIES and were removed.
     
     Entries use exponential backoff: 30s, 60s, 120s between retries.
     """
     queue = load_queue()
     if not queue:
-        return 0, 0
+        return 0, 0, []
 
     success = 0
     remaining = []
+    dropped = []
     now = time.time()
 
     for entry in queue:
         retries = entry.get("retries", 0)
         if retries >= MAX_RETRIES:
             # Give up after too many retries
+            dropped.append(entry)
             continue
 
         # Exponential backoff: delay doubles each retry
@@ -83,7 +88,7 @@ def flush_queue(submit_fn) -> tuple[int, int]:
             remaining.append(entry)
 
     save_queue(remaining)
-    return success, len(remaining)
+    return success, len(remaining), dropped
 
 
 def queue_size() -> int:
