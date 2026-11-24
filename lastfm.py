@@ -104,6 +104,9 @@ def get_recent_tracks(
             "artist": t["artist"]["#text"],
             "title": t["name"],
             "album": album.get("#text", "") if isinstance(album, dict) else album,
-            "timestamp": int(t.get("@date", {}).get("uts", 0)),
+            # Last.fm's JSON uses "date" (not "@date"); the "now playing"
+            # entry has no date and is flagged in "@attr" instead.
+            "timestamp": int(t.get("date", {}).get("uts", 0)),
+            "now_playing": t.get("@attr", {}).get("nowplaying") == "true",
         })
     return results

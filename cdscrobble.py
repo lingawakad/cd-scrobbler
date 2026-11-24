@@ -825,7 +825,12 @@ def _print_lf_history(tracks):
         title = t["title"]
         album = t.get("album", "")
         ts = t.get("timestamp", 0)
-        dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+        if t.get("now_playing"):
+            dt = "now playing     "
+        elif ts:
+            dt = time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+        else:
+            dt = "????-??-?? ??:??"
         album_str = f" ({album})" if album else ""
         print(f"  {dt}  {artist} — {title}{album_str}")
 
